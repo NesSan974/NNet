@@ -1,0 +1,16 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Iinclude",
+      "-o",
+      "build/main.o",
+      "src/main.c"
+    ],
+    "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/main.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/main.o"
+  }
+]
