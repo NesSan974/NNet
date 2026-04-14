@@ -6,11 +6,25 @@
       "-Wall",
       "-Iinclude",
       "-o",
-      "build/main.o",
-      "src/main.c"
+      "build/server.o",
+      "src/server.c"
     ],
     "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
-    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/main.c",
-    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/main.o"
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/server.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/server.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Iinclude",
+      "-o",
+      "build/client.o",
+      "src/client.c"
+    ],
+    "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/client.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/client.o"
   }
 ]
