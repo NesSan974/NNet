@@ -1,9 +1,10 @@
-
 #ifndef __net_H__
 #define __net_H__
 
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 // --------------------------------------------------
 // DEFINE ZONE
@@ -16,7 +17,7 @@
 
 #define PKT_PEER_MASK (0x3FFF)
 
-// define dynamic array
+// -- define dynamic array
 
 #define da_append(da, item)                                                    \
   do {                                                                         \
@@ -34,7 +35,9 @@
 // Structure
 // --------------------------------------------------
 
-// define fixed size circual buffer
+// -- define fixed size circual buffer
+
+// -- define circualr buffer
 
 #define cb_init(cb, fixed_size)                                                \
   do {                                                                         \
@@ -89,11 +92,10 @@ enum message_command {
   SEND_UNRELIABLE_FRAGMENT = 0x0C,
 };
 
-
-
 // -- CLIENT
 struct client {
-  int fd;
+  int peerId;
+  uint8_t metadata;
 };
 
 struct da_client {
@@ -108,7 +110,6 @@ struct packet_header {
   uint16_t CommandCount;
   uint16_t SentTime;
   uint16_t flags;
-  struct client client;
 };
 
 struct message {
@@ -136,12 +137,6 @@ struct message {
 
   struct packet_header packet_header;
   uint16_t ReceivedSentTime;
-};
-
-struct da_message {
-  struct message *items;
-  size_t count;
-  size_t capacity;
 };
 
 struct cb_message {
@@ -181,12 +176,7 @@ struct message_base_raw {
     uint16_t ReceivedSeqNumber;
     uint16_t ReliableSeqNumber;
   };
-  union { // Suite du header message dépendemment de 'command'
     uint8_t message_part2[];
-    struct message_ack_raw ack_header[];
-    struct message_send_raw send_header[];
-    struct message_fragment_raw fragment_header[];
-  };
 };
 
 struct packet_header_opt_time_raw {
@@ -196,30 +186,42 @@ struct packet_header_opt_time_raw {
 struct packet_header_base_raw {
   uint16_t PeerID;
   uint16_t CommandCount;
+  struct packet_header_opt_time_raw opt_timeSpent[];
+
+  /*
   union {
-    struct packet_header_opt_time_raw opt_timeSpent[];
+  struct packet_header_opt_time_raw opt_timeSpent[];
   };
+   */
+};
+
+// -- poll
+struct da_pollfd {
+  struct pollfd *items;
+  size_t capacity;
+  size_t count;
 };
 
 // --------------------------------------------------
 // Global variable
 // --------------------------------------------------
-struct da_message recvMessageBuff;
-struct da_message sendMessageBuff;
+
+extern struct cb_message recvMessageBuff;
+extern struct cb_message sendMessageBuff;
 // struct da_xxx waitingAck;
 
-struct da_client da_client = {0};
+extern struct da_client da_client;
 
+extern struct da_pollfd pollfds;
 // --------------------------------------------------
 // Function definition
 // --------------------------------------------------
 
-size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph);
-size_t parseMessageHeader(unsigned char *buff, struct message *msg);
-int handleIncommingPacket(struct client client);
+ssize_t index_of_client(int id);
+ssize_t index_of_poll(int fd);
 
-// read and enqueue
-void checkIncommingPacketFromFD(struct da_client *da);
-struct message *getRecvMessage();
+void read_and_enqueue_message();
+int server_accept();
+ssize_t readEntirePayload(int fd, uint8_t **buff_out);
 
 #endif // __net_H__

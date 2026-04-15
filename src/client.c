@@ -10,6 +10,11 @@
 
 #include "net.h"
 
+struct cb_message recvMessageBuff;
+struct cb_message sendMessageBuff;
+struct da_client da_client = {0};
+struct da_pollfd pollfds = {0};
+
 int main(int argc, char **argv) {
 
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -65,9 +70,12 @@ int main(int argc, char **argv) {
 
   printf("total_packet_size %d\n", total_packet_size);
   printf("buff_it %ld\n", buff_it);
-  send(fd, send_buff, total_packet_size, 0);
+  ssize_t n = send(fd, send_buff, total_packet_size, 0);
+
+  printf("n %ld\n", n);
 
   close(fd);
+
 
   return 0;
 }

@@ -6,12 +6,12 @@
       "-Wall",
       "-Iinclude",
       "-o",
-      "build/server.o",
-      "src/server.c"
+      "build/client",
+      "src/client.c"
     ],
     "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
-    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/server.c",
-    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/server.o"
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/client.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/client"
   },
   {
     "arguments": [
@@ -20,11 +20,39 @@
       "-Wall",
       "-Iinclude",
       "-o",
-      "build/client.o",
-      "src/client.c"
+      "build/client",
+      "src/net.c"
     ],
     "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
-    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/client.c",
-    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/client.o"
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/net.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/client"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Iinclude",
+      "-o",
+      "build/server",
+      "src/server.c"
+    ],
+    "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/server.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/server"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-Wall",
+      "-Iinclude",
+      "-o",
+      "build/server",
+      "src/net.c"
+    ],
+    "directory": "/home/quentin/Projects/C/enetpersopourdevraiomfg",
+    "file": "/home/quentin/Projects/C/enetpersopourdevraiomfg/src/net.c",
+    "output": "/home/quentin/Projects/C/enetpersopourdevraiomfg/build/server"
   }
 ]
