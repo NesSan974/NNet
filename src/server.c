@@ -1,136 +1,200 @@
-#include <asm-generic/errno.h>
 #include <assert.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include <poll.h>
 
 #include <netinet/in.h>
-#include <netinet/ip.h> /* Surensemble des précédents */
-#include <string.h>
+#include <netinet/ip.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
-// --------------------------------------------------
-// DEFINE ZONE
-// --------------------------------------------------
-#define SOCK_ERR (-1)
-#define POLLING_ERROR (-1)
-#define PORT 2202
-#define BACKLOG 512
-#define MAX_PKT_HEADER_SIZE (64)
+#include "net.h"
 
-#define PKT_PEER_MASK (0x3FFF)
-
-enum flag {
-  MESSAGE_FLAG_ACKNOWLEDGE = (1 << 7),
-  MESSAGE_FLAG_UNSEQUENCED = (1 << 6),
-  MESSAGE_FLAG_MASK = MESSAGE_FLAG_ACKNOWLEDGE | MESSAGE_FLAG_UNSEQUENCED,
-
-  PACKET_FLAG_COMPRESSED = (1 << 6), // si commpressé
-  PACKET_FLAG_SENT_TIME = (1 << 7),  // Si on envoit le timestamp
-  PACKET_FLAG_OFFSET = (8),
-  PACKET_FLAG_MASK = (PACKET_FLAG_COMPRESSED | PACKET_FLAG_SENT_TIME)
-                     << PACKET_FLAG_OFFSET,
-
-};
-
-enum message_command {
-  ACKNOWLEDGE = 0x01,
-  CONNECT = 0x02,
-  VERIFY_CONNECT = 0x03,
-  DISCONNECT = 0x04,
-  PING = 0x05,
-  SEND_RELIABLE = 0x06,
-  SEND_UNRELIABLE = 0x07,
-  SEND_FRAGMENT = 0x08,
-  SEND_UNSEQUENCED = 0x09,
-  BANDWIDTH_LIMIT = 0x0A,
-  THROTTLE_CONFIGURE = 0x0B,
-  SEND_UNRELIABLE_FRAGMENT = 0x0C,
-};
-
-#define da_append(da, item)                                                    \
-  do {                                                                         \
-    if (da.count >= da.capacity) {                                             \
-      if (da.capacity == 0)                                                    \
-        da.capacity = 256;                                                     \
-      else                                                                     \
-        da.capacity *= 2;                                                      \
-      da.items = realloc(da.items, da.capacity * sizeof(*da.items));           \
-    }                                                                          \
-    da.items[da.count++] = item;                                               \
-  } while (0)
-
-// --------------------------------------------------
-// Structure
-// --------------------------------------------------
-
-struct client {
-  int fd;
-};
-
-// -- Dynamic arrays
-
-struct da_client {
-  struct client *items;
-  size_t count;
+struct da_pollfd {
+  struct pollfd *items;
   size_t capacity;
+  size_t count;
 };
 
-struct packet_header {
-  uint16_t PeerID;
-  uint16_t CommandCount;
-  uint8_t flags;
-  uint8_t SentTime[6];
-};
+int handleRecvMessage();
+int setThisFuckinkSocket();
+// bloquante
+void functionOfPollHandling(struct da_pollfd *pollfds);
 
-struct message {
-  struct packet_header packet_header;
-  uint8_t Command;
-  uint8_t ChannelID;
-  union {
-    uint16_t seq_number;
-    uint16_t UnreliableSeqNumber;
-    uint16_t ReliableSeqNumber;
+int servFd = -1;
+
+// --------------------------------------------------
+// MAIN Function
+// --------------------------------------------------
+
+int main(int argc, char **argv) {
+
+  // -- Set-up socket
+  int servFd = setThisFuckinkSocket();
+
+  printf("listening on port '%d'\n", PORT);
+
+  // -- setup befor infinite loop
+  struct da_pollfd pollfds = {0};
+
+  da_append(pollfds, (struct pollfd){.fd = servFd});
+
+  // -- start infinite loop
+  while (1) {
+
+    // -----------------------
+    // Traitement message reçu
+    // -----------------------
+    functionOfPollHandling(&pollfds);
+
+    checkIncommingPacketFromFD(&da_client);
+
+    // TODO on traitera par batch plus tard, atm, on traite tant qu'il y a à
+    // traiter
+    while (handleRecvMessage())
+      ;
+
+    // // -----------------------
+    // // Traitement message à envoyer
+    // // -----------------------
+    // if (sendMessageBuff.count >= 1) {
+    //   // TODO traiter un message de `incMessageToHandle`
+    //   struct send_mes *msg = getSendMessage();
+    //   if (msg != NULL) {
+    //     handleSendMessage(msg);
+    //   }
+    // }
+  }
+
+  return 0;
+}
+
+// --------------------
+
+void functionOfPollHandling(struct da_pollfd *pollfds) {
+
+  if (poll(pollfds->items, pollfds->count, -1) == -1) {
+    perror("error whil poll-ing");
+  }
+
+  if (pollfds->items[0].revents & POLLIN) {
+    int client_fd = accept(servFd, NULL, NULL);
+
+    if (client_fd == SOCK_ERR) {
+      perror("error while accepting new client");
+    } else {
+      // else, we append the fd to the dynamic array to poll it
+      da_append(da_client, (struct client){.fd = client_fd});
+    }
+  }
+
+  for (size_t i = 1; i < pollfds->count; i++) {
+
+    if (pollfds->items[i].revents & POLLIN) {
+      printf("socket '%d' pollin", pollfds->items[i].fd);
+    }
+  }
+}
+
+int handleRecvMessage() {
+
+  struct message *msg = getRecvMessage();
+  if (msg == NULL) {
+    return 0;
+  }
+
+  printf("%s\n", __FUNCTION__);
+
+  switch (msg->Command) {
+  case ACKNOWLEDGE:
+    assert(1 && "Not implemented yet");
+    // TODO : faire une liste de packet devant etre ack
+    // lorsque l'on recoit un ack, on cherche dans la liste, et on la tej de la
+    // liste
+    break;
+
+  case CONNECT: {
+    assert(1 && "CONNECT : Not implemented yet");
+
+    // TODO mettre dans le buff "outMessagebuff"
+  } break;
+
+  case DISCONNECT:
+  case PING:
+    assert(1 && "DISCONNECT & PING : Not implemented yet");
+    break;
+
+  case SEND_RELIABLE:
+  case SEND_UNRELIABLE:
+  case SEND_UNSEQUENCED:
+    printf("traitement d'un msg ayant pour command 'SEND_RELIABLE', "
+           "'SEND_UNRELIABLE' ou 'SEND_FRAGMENT'\n ");
+    msg->isDisable = 1;
+    assert(1 && "SEND_XXX : Not implemented yet");
+
+    break;
+
+  case SEND_FRAGMENT:
+  case SEND_UNRELIABLE_FRAGMENT:
+    // TODO : faudra memcpy dans un cache le temps d'assembler tout les
+    // fragments
+    assert(1 && "FRAGMENT & UNRELIABLE_FRAGMENT : Not implemented yet");
+    break;
+
+  case BANDWIDTH_LIMIT:
+  case THROTTLE_CONFIGURE:
+    assert(1 && "BANDWIDTH_LIMIT & THROTTLE_CONFIGURE : Not implemented");
+
+  default:
+  case VERIFY_CONNECT:
+    break;
   };
-  uint8_t flags;
-  char isDisable;
 
-  // --
+  if (msg->payload != NULL) {
+    free(msg->payload);
+    msg->payload = NULL;
+  }
 
-  uint16_t StartSeq;
+  return 1;
+}
 
-  uint32_t DataLength;
-  uint32_t FragmentCount;
-  uint32_t FragmentNumber;
-  uint32_t TotalLength;
-  uint32_t FragmentOffset;
-  uint8_t *payload;
+int setThisFuckinkSocket() {
+  int serv_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (serv_fd == SOCK_ERR) {
+    perror("impossible to create socket");
+    return SOCK_ERR;
+  }
 
-  uint8_t ReceivedSentTime[6];
-};
+  setsockopt(serv_fd, SOL_SOCKET, SO_REUSEPORT, &((int){1}), sizeof(int));
 
-struct da_message {
-  struct message *items;
-  size_t count;
-  size_t capacity;
-};
+  const struct sockaddr_in addr = {
+      .sin_family = AF_INET,         /* Famille d'adresses : AF_INET */
+      .sin_port = htons(2202),       /* Port dans l'ordre des octets réseau */
+      .sin_addr.s_addr = INADDR_ANY, /* Adresse Internet */
+  };
 
-// --------------------------------------------------
-// Global variable
-// --------------------------------------------------
+  if (bind(serv_fd, (const struct sockaddr *)&addr, sizeof(addr)) == SOCK_ERR) {
+    perror("impossible to bind socket");
+    return SOCK_ERR;
+  }
 
-struct da_message incMessageToHandle;
+  if (listen(serv_fd, BACKLOG) == SOCK_ERR) {
+    perror("impossible to listen the socket");
+    return SOCK_ERR;
+  }
 
-struct da_message outMessageQueueToHandle;
+  return serv_fd;
+}
 
-// struct da_xxx waitingAck;
+// -----
 
-// --------------------------------------------------
-// Function
-// --------------------------------------------------
-
+// TODO : utiliser les struct "_raw" pour parser de maniere plus lisible avant
+// de balancer ca dans ph
 size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph) {
 
   size_t offset_readed = 0;
@@ -138,8 +202,7 @@ size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph) {
   uint16_t *peer_and_flags_networked = (uint16_t *)(buff + offset_readed);
   offset_readed += sizeof(uint16_t);
 
-  ph->flags =
-      (*peer_and_flags_networked & PACKET_FLAG_MASK) >> PACKET_FLAG_OFFSET;
+  ph->flags = (*peer_and_flags_networked & PACKET_FLAG_MASK);
 
   ph->PeerID = ntohs(*peer_and_flags_networked & (PACKET_FLAG_MASK ^ 0xFFFF));
 
@@ -149,14 +212,16 @@ size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph) {
   ph->CommandCount = ntohs(*command_count_networked);
 
   if (ph->flags & PACKET_FLAG_SENT_TIME) {
-    const uint8_t timestamp_size = 6;
-    memcpy(ph->SentTime, buff + offset_readed, timestamp_size);
-    offset_readed += timestamp_size;
+    uint16_t *timestamp = (uint16_t *)(buff + offset_readed);
+    offset_readed += sizeof(*timestamp);
+    ph->SentTime = ntohs(*timestamp);
   }
 
   return offset_readed;
 }
 
+// TODO : utiliser les struct "_raw" pour parser de maniere plus lisible avant
+// de balancer ca dans msg
 size_t parseMessageHeader(unsigned char *buff, struct message *msg) {
   size_t offset_readed = 0;
 
@@ -186,16 +251,16 @@ size_t parseMessageHeader(unsigned char *buff, struct message *msg) {
     msg->seq_number = ntohs(*seq_number_networked);
   }
 
-
-  printf("command %d, flags %d, channel_id %d, seq_number %d\n", msg->Command, msg->flags, msg->ChannelID, msg->seq_number);
+  printf("command %d, flags %d, channel_id %d, seq_number %d\n", msg->Command,
+         msg->flags, msg->ChannelID, msg->seq_number);
   switch (msg->Command) {
 
-  case ACKNOWLEDGE:
+  case ACKNOWLEDGE: {
 
-    memcpy(msg->ReceivedSentTime, buff + offset_readed,
-           sizeof(msg->ReceivedSentTime));
-    offset_readed += sizeof(msg->ReceivedSentTime);
-    break;
+    uint16_t *timestamp = (uint16_t *)(buff + offset_readed);
+    offset_readed += sizeof(*timestamp);
+    msg->ReceivedSentTime = ntohs(*timestamp);
+  } break;
 
   case CONNECT:
   case VERIFY_CONNECT:
@@ -204,7 +269,7 @@ size_t parseMessageHeader(unsigned char *buff, struct message *msg) {
   case SEND_UNSEQUENCED: {
     uint32_t *data_length_networked = (uint32_t *)(buff + offset_readed);
     offset_readed += sizeof(*data_length_networked);
-    msg->DataLength = ntohs(*data_length_networked);
+    msg->DataLength = ntohl(*data_length_networked);
 
   } break;
 
@@ -246,24 +311,27 @@ size_t parseMessageHeader(unsigned char *buff, struct message *msg) {
 
 /// @brief read recieved packet and enqueue incoming packet into
 /// 'incMessageToHandle'
-int handleIncommingPacket(int fd) {
-  printf("\nmessage reçu from fd : '%d'\n", fd);
+int handleIncommingPacket(struct client client) {
+  printf("\nmessage reçu from fd : '%d'\n", client.fd);
 
   // Peeking in recv
   unsigned char header_buff_peek[MAX_PKT_HEADER_SIZE] = {0};
-  recv(fd, header_buff_peek, MAX_PKT_HEADER_SIZE, MSG_PEEK);
+  recv(client.fd, header_buff_peek, MAX_PKT_HEADER_SIZE, MSG_PEEK);
 
   // Parsing the packet header
   struct packet_header packet_header = {0};
+
   size_t pkt_header_size = parsePacketHeader(header_buff_peek, &packet_header);
   printf("pkt_header_size %ld\n", pkt_header_size);
   printf("cmd_cnt = %d, flags = %d, peer_id = %d \n",
          packet_header.CommandCount, packet_header.flags, packet_header.PeerID);
   // sentTime :(
 
+  packet_header.client = client;
+
   // Consuming the header from the recv
   unsigned char header_buff_consume[pkt_header_size];
-  recv(fd, header_buff_consume, pkt_header_size, 0);
+  recv(client.fd, header_buff_consume, pkt_header_size, 0);
 
   // If command count is 0, we're flushing the rest of the recv, and returning
   if (packet_header.CommandCount == 0) {
@@ -273,7 +341,8 @@ int handleIncommingPacket(int fd) {
     // Flushing the payload if exist
     unsigned char payload_buff[2048];
     //
-    while (recv(fd, payload_buff, sizeof(payload_buff), MSG_DONTWAIT) > 0)
+    while (recv(client.fd, payload_buff, sizeof(payload_buff), MSG_DONTWAIT) >
+           0)
       ;
     return 0;
   }
@@ -296,7 +365,7 @@ int handleIncommingPacket(int fd) {
       payload_buff = realloc(payload_buff, alloc_per_loop * multiplicator);
 
       recv_return_value =
-          recv(fd, payload_buff + total_payload_size, alloc_per_loop, 0);
+          recv(client.fd, payload_buff + total_payload_size, alloc_per_loop, 0);
 
       total_payload_size += recv_return_value;
       multiplicator++;
@@ -326,11 +395,14 @@ int handleIncommingPacket(int fd) {
     }
   }
 
-  printf("\nenque-ing message\n");
+  printf("enque-ing message\n");
 
   ssize_t message_offset_payload = 0;
 
-  for (int i = 0; i < packet_header.CommandCount; i++) {
+  for (int i = 0; i < packet_header.CommandCount &&
+                  message_offset_payload < total_payload_size;
+       i++) {
+
     struct message msg = {0};
     size_t msg_header_size = parseMessageHeader(payload_buff, &msg);
     message_offset_payload += msg_header_size;
@@ -343,7 +415,7 @@ int handleIncommingPacket(int fd) {
     case SEND_RELIABLE:
     case SEND_UNRELIABLE:
     case SEND_UNSEQUENCED: {
-        printf("datalen : %d\n", msg.DataLength);
+      printf("datalen : %d\n", msg.DataLength);
       msg.payload = malloc(msg.DataLength);
       memcpy(msg.payload, payload_buff + message_offset_payload,
              msg.DataLength);
@@ -355,7 +427,7 @@ int handleIncommingPacket(int fd) {
     case SEND_FRAGMENT: {
       size_t rest_payload = total_payload_size - message_offset_payload;
       message_offset_payload += rest_payload;
-      printf("en théorie, le payload du messag eest de : %ld\n", rest_payload);
+      printf("en théorie, le payload du messag est de : %ld\n", rest_payload);
       assert(1 && "FRAGMENTED ARE NOT IMPLEMENTED YET");
     } break;
     default:
@@ -363,10 +435,8 @@ int handleIncommingPacket(int fd) {
       break;
     }
 
-    da_append(incMessageToHandle, msg);
+    da_append(recvMessageBuff, msg);
   }
-
-
 
   if (message_offset_payload != total_payload_size) {
     fprintf(stderr, "message_offset_payload %ld != %ld total_payload_size\n",
@@ -378,7 +448,8 @@ int handleIncommingPacket(int fd) {
   return 0;
 }
 
-void checkIncommingPacket(struct da_client *da) {
+void checkIncommingPacketFromFD(struct da_client *da) {
+
   for (int i = 0; i < da->count; i++) {
 
     if (da->items[i].fd == -1) {
@@ -402,65 +473,20 @@ void checkIncommingPacket(struct da_client *da) {
       continue;
     }
 
-    handleIncommingPacket(da->items[i].fd);
+    handleIncommingPacket(da->items[i]);
   }
 }
 
-int main(int argc, char **argv) {
+struct message *getRecvMessage() {
+  if (recvMessageBuff.count <= 0)
+    return NULL;
 
-  int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-  if (fd == SOCK_ERR) {
-    perror("impossible to create socket");
-    return SOCK_ERR;
-  }
+  struct message *msg = NULL;
 
-  setsockopt(fd, SOL_SOCKET, SOL_SOCKET, &((int){1}), sizeof(int));
-
-  const struct sockaddr_in addr = {
-      .sin_family = AF_INET,         /* Famille d'adresses : AF_INET */
-      .sin_port = htons(2202),       /* Port dans l'ordre des octets réseau */
-      .sin_addr.s_addr = INADDR_ANY, /* Adresse Internet */
-  };
-
-  if (bind(fd, (const struct sockaddr *)&addr, sizeof(addr)) == SOCK_ERR) {
-    perror("impossible to bind socket");
-    return SOCK_ERR;
-  }
-
-  if (listen(fd, BACKLOG) == SOCK_ERR) {
-    perror("impossible to listen the socket");
-    return SOCK_ERR;
-  }
-
-  struct da_client da_client = {0};
-
-  printf("listening on port '%d'\n", PORT);
-
-  while (1) {
-
-    if (incMessageToHandle.count >= 1) {
-      // TODO Envoyer un message de `incMessageToHandle`
+  for (size_t i = 0; i < recvMessageBuff.count && msg == NULL; i++) {
+    if (!recvMessageBuff.items[i].isDisable) {
+      msg = (recvMessageBuff.items + i);
     }
-
-    // -----------------------
-    // Traitement nouveau client
-    // -----------------------
-    int client_fd = accept(fd, NULL, NULL);
-
-    if (client_fd == SOCK_ERR) {
-      if (errno != EWOULDBLOCK)
-        // If this is not a EWOULDBLOCK, this is a real error
-        perror("error while accepting new client");
-    } else {
-      // else, we append the fd to the dynamic array to poll it
-      da_append(da_client, (struct client){.fd = client_fd});
-    }
-
-    // -----------------------
-    // Traitement message reçu
-    // -----------------------
-    checkIncommingPacket(&da_client);
   }
-
-  return 0;
+  return msg;
 }
