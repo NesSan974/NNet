@@ -1,8 +1,10 @@
 CFLAGS := -Wall
 
-.PHONY=all
+.PHONY=all client server
 
-all : build/server.o build/client.o
+all : client server
+client : build/client.o
+server : build/server.o
 
 build/server.o : src/server.c
 	gcc src/server.c $(CFLAGS) -Iinclude -Llib -o build/server.o
