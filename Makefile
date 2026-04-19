@@ -1,13 +1,18 @@
-CFLAGS := -Wall
 
-.PHONY=all client server
 
-all : client server
-client : build/client
+.PHONY : all server client
+
+all : server client
+
 server : build/server
 
-build/server : src/server.c src/net.c
-	gcc -o build/server src/server.c src/net.c $(CFLAGS) -Iinclude
+client : build/client
 
-build/client : src/client.c src/net.c
-	gcc -o build/client src/client.c src/net.c $(CFLAGS) -Iinclude
+build/server : build/obj/net.o src/server.c
+	gcc -o $@ build/obj/net.o src/server.c -Iinclude
+
+build/obj/net.o :
+	gcc -o $@ -c src/net.c -Iinclude
+
+build/client : build/obj/net.o src/client.c
+	gcc -o $@ src/client.c -Iinclude

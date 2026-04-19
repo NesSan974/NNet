@@ -1,4 +1,5 @@
 
+#include <asm-generic/errno.h>
 #include <assert.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -11,11 +12,21 @@
 
 #include "net.h"
 
-int readPacketHeader(int fd, struct packet_header *ph);
-int server_accept();
-size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph);
-size_t parseMessageHeader(unsigned char *buff, struct message *msg);
+struct cb_message G_recvMessageBuff[NB_PRIORITY];
+struct cb_message G_sendMessageBuff[NB_PRIORITY];
+
+struct da_client G_da_client = {0};
+
 int readPacket(int fd);
+
+ssize_t readPacketHeader(int fd, struct packet_header *ph_out);
+size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph_out);
+
+size_t parseMessage(unsigned char *buff, size_t buff_size,
+                    struct message *msg_out);
+size_t parseMessageHeader(unsigned char *buff, size_t buff_size,
+                          struct message *msg_out);
+void handleSendBuff();
 
 // -----
 
@@ -68,34 +79,86 @@ ssize_t readEntirePayload(int fd, uint8_t **buff_out) {
   return total_payload_size;
 }
 
-int readPacketHeader(int fd, struct packet_header *ph) {
+size_t parseMessage(unsigned char *buff, size_t buff_size,
+                    struct message *msg_out) {
+
+  size_t header_size = parseMessageHeader(buff, buff_size, msg_out);
+
+  if (header_size == 0) {
+    return 0;
+  }
+
+  printf("msg_header_size %ld :\t", header_size);
+  printf("command %d, flags %d, channel_id %d, seq_number %d\n",
+         msg_out->Command, msg_out->flags, msg_out->ChannelID,
+         msg_out->seq_number);
+
+  size_t message_payload_size = 0;
+
+  switch (msg_out->Command) {
+
+  case CONNECT:
+  case VERIFY_CONNECT:
+  case SEND_RELIABLE:
+  case SEND_UNRELIABLE:
+  case SEND_UNSEQUENCED: {
+    printf("datalen : %d\n", msg_out->DataLength);
+
+    msg_out->payload = malloc(msg_out->DataLength);
+    memcpy(msg_out->payload, buff + header_size, msg_out->DataLength);
+    message_payload_size += msg_out->DataLength;
+  } break;
+
+  case SEND_UNRELIABLE_FRAGMENT:
+  case SEND_FRAGMENT: {
+    size_t rest_payload = buff_size - header_size;
+    message_payload_size += rest_payload;
+    printf("Le payload du message est de : '%ld' octet\n", rest_payload);
+    assert(1 && "FRAGMENTED ARE NOT IMPLEMENTED YET");
+  } break;
+  default:
+    fprintf(stderr, "Error '%s' : UNREACHABLE POINT HIT\n", __FUNCTION__);
+    break;
+  }
+
+  return header_size + message_payload_size;
+}
+
+ssize_t readPacketHeader(int fd, struct packet_header *ph) {
 
   // Peeking in recv
-  unsigned char header_buff_peek[MAX_PKT_HEADER_SIZE] = {0};
-  ssize_t header_peek_n =
-      recv(fd, header_buff_peek, MAX_PKT_HEADER_SIZE, MSG_PEEK);
+  unsigned char recv_buff[MAX_PKT_HEADER_SIZE + 1] = {0};
+  ssize_t header_peeked_n =
+      recv(fd, recv_buff, MAX_PKT_HEADER_SIZE + 1, MSG_PEEK);
 
-  if (header_peek_n <= 0) {
-    return header_peek_n;
+  if (header_peeked_n <= 0) {
+    return header_peeked_n;
+  }
+
+  if (header_peeked_n < MIN_PKT_HEADER_SIZE) {
+    return -2;
   }
 
   // Parsing the packet header
+  size_t pkt_header_size = parsePacketHeader(recv_buff, ph);
 
-  size_t pkt_header_size = parsePacketHeader(header_buff_peek, ph);
+  if (pkt_header_size > MAX_PKT_HEADER_SIZE) {
+    return -3;
+  }
 
   // Consuming the header from the recv
-  unsigned char header_buff_consume[pkt_header_size];
-  ssize_t n_consumed = recv(fd, header_buff_consume, pkt_header_size, 0);
+  ssize_t n_consumed = recv(fd, recv_buff, pkt_header_size, 0);
 
-  if (n_consumed != pkt_header_size) {
-    return -2;
+  if (n_consumed < pkt_header_size) {
+    return -4;
   }
 
   return pkt_header_size;
 }
 
-/// @brief read recieved packet and enqueue incoming packet into
-/// 'incMessageToHandle'
+/// @brief read the recieved packet, and enqueue message into
+// 'incMessageToHandle'
+// @param fd fd to recv
 // @return false (0) if no update
 int readPacket(int fd) {
 
@@ -103,16 +166,36 @@ int readPacket(int fd) {
   struct packet_header packet_header;
   ssize_t packet_header_size = readPacketHeader(fd, &packet_header);
 
+  // NOTE / TODO : tcp related
   if (packet_header_size == 0) {
     printf("connexion close from client, fd : '%d'\n", fd);
     // deleting it from pollfds
-    pollfds.items[index_of_poll(fd)].fd = -1;
+    G_pollfds.items[index_of_poll(fd)].fd = -1;
     return 0;
   }
 
   if (packet_header_size < 0) {
-    fprintf(stderr, "impossible de recv sur le fd '%d'\n", fd);
-    perror("");
+
+    // TODO : faire une fonction "print error" ou un truc comme ca
+    switch (packet_header_size) {
+    case -1:
+      fprintf(stderr, "error while recv-ing the packet header on the fd '%d'\n",
+              fd);
+      perror("");
+      break;
+    case -2:
+      fprintf(stderr, "Unexpected end of the packet header, the packet is too "
+                      "small (lt 4)\n");
+      break;
+    case -3:
+      fprintf(stderr,
+              "Error while parsing the packet header, parsed too much\n");
+      break;
+    default:
+      fprintf(stderr, "Error '%s' : UNREACHABLE POINT HIT\n", __FUNCTION__);
+      break;
+    }
+
     return -1;
   }
 
@@ -122,69 +205,49 @@ int readPacket(int fd) {
   printf("cmd_cnt = %d, flags = %d, peer_id = %d \n",
          packet_header.CommandCount, packet_header.flags, packet_header.PeerID);
 
-  // Si pas de message à traiter, on return
-  if (packet_header.CommandCount == 0) {
-
-    // Flushing the payload if exist
-    unsigned char payload_buff[1024];
-    while (recv(fd, payload_buff, sizeof(payload_buff), MSG_DONTWAIT) > 0)
-      ;
-    return 1;
-  }
-
   unsigned char *payload_buff = NULL;
   ssize_t total_payload_size = readEntirePayload(fd, &payload_buff);
+
+  // Si pas de message à traiter, on return
+  if (packet_header.CommandCount == 0) {
+    return 1;
+  }
 
   if (total_payload_size <= 0) {
     return -2;
   }
 
-  ssize_t message_offset_payload = 0;
+  ssize_t read_payload = 0;
 
-  for (int i = 0; i < packet_header.CommandCount &&
-                  message_offset_payload < total_payload_size;
+  for (int i = 0;
+       i < packet_header.CommandCount && read_payload < total_payload_size;
        i++) {
 
-    struct message msg = {0};
-    size_t msg_header_size = parseMessageHeader(payload_buff, &msg);
-    message_offset_payload += msg_header_size;
-    printf("msg_header_size %ld :\t", msg_header_size);
-    printf("command %d, flags %d, channel_id %d, seq_number %d\n", msg.Command,
-           msg.flags, msg.ChannelID, msg.seq_number);
+    // Parse message
 
-    switch (msg.Command) {
-
-    case CONNECT:
-    case VERIFY_CONNECT:
-    case SEND_RELIABLE:
-    case SEND_UNRELIABLE:
-    case SEND_UNSEQUENCED: {
-      printf("datalen : %d\n", msg.DataLength);
-      msg.payload = malloc(msg.DataLength);
-      memcpy(msg.payload, payload_buff + message_offset_payload,
-             msg.DataLength);
-      message_offset_payload += msg.DataLength;
-
-    } break;
-
-    case SEND_UNRELIABLE_FRAGMENT:
-    case SEND_FRAGMENT: {
-      size_t rest_payload = total_payload_size - message_offset_payload;
-      message_offset_payload += rest_payload;
-      printf("en théorie, le payload du messag est de : %ld\n", rest_payload);
-      assert(1 && "FRAGMENTED ARE NOT IMPLEMENTED YET");
-    } break;
-    default:
-      fprintf(stderr, "Error '%s' : UNREACHABLE POINT HIT\n", __FUNCTION__);
-      break;
+    if (total_payload_size + read_payload < MIN_MSG_HEADER_SIZE) {
+      assert(1 &&
+             "Garbage payload, can't parse message header, payload too small");
     }
 
-    cb_enqueue(recvMessageBuff, msg);
+    struct message msg = {0};
+    size_t parse_size =
+        parseMessage(payload_buff + read_payload, total_payload_size, &msg);
+
+    if (parse_size < 0) {
+      assert(1 && "impossible to read or parse the message");
+    }
+
+    read_payload += parse_size;
+
+    cb_enqueue(G_recvMessageBuff[(msg.ChannelID & CHANNEL_FLAG_MASK) >>
+                                 CHANNEL_FLAG_OFFSET],
+               msg);
   }
 
-  if (message_offset_payload != total_payload_size) {
+  if (read_payload != total_payload_size) {
     fprintf(stderr, "message_offset_payload %ld != %ld total_payload_size\n",
-            message_offset_payload, total_payload_size);
+            read_payload, total_payload_size);
   }
 
   free(payload_buff);
@@ -192,124 +255,116 @@ int readPacket(int fd) {
   return 0;
 }
 
-/// @return true (non-zero) if the fd is triggered on 'pollin'
-int server_accept() {
+void net_handle_io() {
 
-  if (pollfds.items[0].revents == 0) {
-    return 0;
-  }
-
-  if ((pollfds.items[0].revents & POLLIN) == 0) {
-    fprintf(stderr,
-            "le ServFd à été trigger par poll(), mais n'est pas en POLLIN\n"
-            "\trevent = %d\n",
-            pollfds.items[0].revents);
-    return -1;
-  }
-
-  pollfds.items[0].revents = 0;
-
-  int client_fd = accept(pollfds.items[0].fd, NULL, NULL);
-  if (client_fd == SOCK_ERR) {
-    perror("error while accepting new client");
-    return -2;
-  }
-
-  printf("\nnew connection, fd : '%d'\n", client_fd);
-
-  struct client c = {.peerId = client_fd}; // TODO : Générer un vrai id
-  da_append(da_client, c);
-
-  struct pollfd pfd = {.fd = client_fd, .events = POLLIN};
-  da_append(pollfds, pfd);
-
-  readPacket(client_fd);
-
-  return 0;
-}
-
-void read_and_enqueue_message() {
-
-  for (size_t i = 0; i < pollfds.count; i++) {
-    if (pollfds.items[i].revents & POLLIN) {
-      printf("\nnew message from '%d'\n", pollfds.items[i].fd);
-      readPacket(pollfds.items[i].fd);
+  for (size_t i = 0; i < G_pollfds.count; i++) {
+    if (G_pollfds.items[i].revents & POLLIN) {
+      printf("\nnew message from '%d'\n", G_pollfds.items[i].fd);
+      readPacket(G_pollfds.items[i].fd);
     }
   }
 }
 
-// TODO : utiliser les struct "_raw" pour parser de maniere plus lisible avant
-// de balancer ca dans msg
-size_t parseMessageHeader(unsigned char *buff, struct message *msg) {
-  size_t offset_readed = 0;
+size_t parseMessageHeader(unsigned char *message_buff, size_t buff_size,
+                          struct message *msg_out) {
+
+  if (buff_size < sizeof(struct message_base_raw)) {
+    return 0;
+  }
+
+  size_t actual_header_size = 0;
+
+  uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
+  struct message_base_raw *read_msg = (struct message_base_raw *)internal_buff;
+
+  memcpy(read_msg, message_buff, sizeof(*read_msg));
+  actual_header_size += sizeof(*read_msg);
 
   // -- command & flags
-  uint8_t *command_and_flags = (uint8_t *)(buff + offset_readed);
-  offset_readed += sizeof(*command_and_flags);
-
-  msg->flags = (*command_and_flags & MESSAGE_FLAG_MASK);
-  msg->Command = (*command_and_flags & (MESSAGE_FLAG_MASK ^ 0xFFFF));
+  msg_out->flags = (read_msg->CommandFlags & MESSAGE_FLAG_MASK);
+  msg_out->Command = (read_msg->CommandFlags & (MESSAGE_FLAG_MASK ^ 0xFF));
 
   // -- channel_id
-  uint8_t *channel_id = (uint8_t *)(buff + offset_readed);
-  offset_readed += sizeof(*channel_id);
-
-  msg->ChannelID = (*channel_id);
+  msg_out->priority = read_msg->ChannelIDFlags & CHANNEL_FLAG_MASK;
+  msg_out->ChannelID = read_msg->ChannelIDFlags & (CHANNEL_FLAG_MASK ^ 0xFFFF);
 
   // -- seq_number
-  if (msg->Command != SEND_UNSEQUENCED &&
-      (msg->flags & MESSAGE_FLAG_UNSEQUENCED) == 0) {
+  if (msg_out->Command != SEND_UNSEQUENCED &&
+      (msg_out->flags & MESSAGE_FLAG_UNSEQUENCED) == 0) {
     // Si command n'est pas 'SEND_UNSEQUENCED' ET qu'il n'y a le flag
     // 'MESSAGE_FLAG_UNSEQUENCED'
     // alors, il y a un numero de sequence
 
-    uint16_t *seq_number_networked = (uint16_t *)(buff + offset_readed);
-    offset_readed += sizeof(*seq_number_networked);
-
-    msg->seq_number = ntohs(*seq_number_networked);
+    // TODO memcpy quand on aura dispatch le seq number
+    msg_out->seq_number = ntohs(read_msg->seq_number);
   }
 
-  switch (msg->Command) {
+  switch (msg_out->Command) {
 
   case ACKNOWLEDGE: {
 
-    uint16_t *timestamp = (uint16_t *)(buff + offset_readed);
-    offset_readed += sizeof(*timestamp);
-    msg->ReceivedSentTime = ntohs(*timestamp);
+    struct message_ack_raw *read_msg_ack;
+
+    if (buff_size < actual_header_size + sizeof(*read_msg_ack)) {
+      actual_header_size = 0;
+      break;
+    }
+
+    memcpy(read_msg->message_part2, message_buff + actual_header_size,
+           sizeof(*read_msg_ack));
+
+    read_msg_ack = (struct message_ack_raw *)(read_msg->message_part2);
+    actual_header_size += sizeof(*read_msg_ack);
+
+    msg_out->ReceivedSentTime = ntohs(read_msg_ack->ReceivedSentTime);
   } break;
 
   case CONNECT:
   case VERIFY_CONNECT:
+    assert(0 && "impossible to parse 'CONNECT' and 'VERIFY_CONNECT',"
+                "not implemented yet");
+    break;
+
   case SEND_RELIABLE:
   case SEND_UNRELIABLE:
   case SEND_UNSEQUENCED: {
-    uint32_t *data_length_networked = (uint32_t *)(buff + offset_readed);
-    offset_readed += sizeof(*data_length_networked);
-    msg->DataLength = ntohl(*data_length_networked);
 
+    struct message_send_raw *read_msg_send;
+
+    if (buff_size < actual_header_size + sizeof(*read_msg_send)) {
+      actual_header_size = 0;
+      break;
+    }
+
+    memcpy(read_msg->message_part2, message_buff + actual_header_size,
+           sizeof(*read_msg_send));
+
+    read_msg_send = (struct message_send_raw *)(read_msg->message_part2);
+    actual_header_size += sizeof(*read_msg_send);
+
+    msg_out->DataLength = ntohl(read_msg_send->DataLength);
   } break;
 
   case SEND_UNRELIABLE_FRAGMENT:
   case SEND_FRAGMENT: {
-    uint16_t *start_seq_networked = (uint16_t *)(buff + offset_readed);
-    offset_readed += sizeof(*start_seq_networked);
-    msg->StartSeq = ntohs(*start_seq_networked);
 
-    uint32_t *fragment_count_networked = (uint32_t *)(buff + offset_readed);
-    offset_readed += sizeof(*fragment_count_networked);
-    msg->FragmentCount = ntohl(*fragment_count_networked);
+    struct message_fragment_raw *read_msg_frgm;
+    if (buff_size < actual_header_size + sizeof(struct message_fragment_raw)) {
+      actual_header_size = 0;
+      break;
+    }
 
-    uint32_t *fragment_number_networked = (uint32_t *)(buff + offset_readed);
-    offset_readed += sizeof(*fragment_number_networked);
-    msg->FragmentNumber = ntohl(*fragment_number_networked);
+    memcpy(read_msg->message_part2, message_buff + actual_header_size,
+           sizeof(*read_msg_frgm));
 
-    uint32_t *total_length_networked = (uint32_t *)(buff + offset_readed);
-    offset_readed += sizeof(*total_length_networked);
-    msg->TotalLength = ntohl(*total_length_networked);
+    read_msg_frgm = (struct message_fragment_raw *)(read_msg->message_part2);
+    actual_header_size += sizeof(*read_msg_frgm);
 
-    uint32_t *fragment_offset_networked = (uint32_t *)(buff + offset_readed);
-    offset_readed += sizeof(*fragment_offset_networked);
-    msg->FragmentOffset = ntohl(*fragment_offset_networked);
+    msg_out->StartSeq = ntohs(read_msg_frgm->StartSeq);
+    msg_out->FragmentCount = ntohl(read_msg_frgm->FragmentCount);
+    msg_out->FragmentNumber = ntohl(read_msg_frgm->FragmentNumber);
+    msg_out->TotalLength = ntohl(read_msg_frgm->TotalLength);
+    msg_out->FragmentOffset = ntohl(read_msg_frgm->FragmentOffset);
 
   } break;
 
@@ -322,40 +377,145 @@ size_t parseMessageHeader(unsigned char *buff, struct message *msg) {
     break;
   };
 
-  return offset_readed;
+  return actual_header_size;
 }
 
-// TODO : utiliser les struct "_raw" pour parser de maniere plus lisible avant
-// de balancer ca dans ph
-size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph) {
+size_t parsePacketHeader(unsigned char *packet_buff,
+                         struct packet_header *ph_out) {
 
   size_t offset_readed = 0;
 
-  uint16_t *peer_and_flags_networked = (uint16_t *)(buff + offset_readed);
-  offset_readed += sizeof(uint16_t);
+  uint8_t internal_buff[MAX_PKT_HEADER_SIZE];
+  struct packet_header_base_raw *read_msg =
+      (struct packet_header_base_raw *)internal_buff;
 
-  ph->flags = (*peer_and_flags_networked & PACKET_FLAG_MASK);
+  memcpy(read_msg, packet_buff, sizeof(*read_msg));
+  offset_readed += sizeof(*read_msg);
 
-  ph->PeerID = ntohs(*peer_and_flags_networked & (PACKET_FLAG_MASK ^ 0xFFFF));
+  ph_out->flags = (read_msg->PeerIDFlags & PACKET_FLAG_MASK);
+  ph_out->PeerID = ntohs(read_msg->PeerIDFlags & (PACKET_FLAG_MASK ^ 0xFFFF));
+  ph_out->CommandCount = ntohs(read_msg->CommandCount);
 
-  uint16_t *command_count_networked = (uint16_t *)(buff + offset_readed);
-  offset_readed += sizeof(uint16_t);
-
-  ph->CommandCount = ntohs(*command_count_networked);
-
-  if (ph->flags & PACKET_FLAG_SENT_TIME) {
-    uint16_t *timestamp = (uint16_t *)(buff + offset_readed);
-    offset_readed += sizeof(*timestamp);
-    ph->SentTime = ntohs(*timestamp);
+  if (ph_out->flags & PACKET_FLAG_SENT_TIME) {
+    memcpy(read_msg->opt_timeSpent, packet_buff + offset_readed,
+           sizeof(*read_msg->opt_timeSpent));
+    ph_out->SentTime = ntohs(read_msg->opt_timeSpent->time);
+    offset_readed += sizeof(*read_msg->opt_timeSpent);
   }
 
   return offset_readed;
 }
 
+size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
+  size_t msg_size = sizeof(struct message_base_raw);
+
+  switch (msg->Command) {
+  case ACKNOWLEDGE:
+    msg_size += sizeof(struct message_ack_raw);
+    break;
+
+  case CONNECT:
+  case VERIFY_CONNECT:
+  case DISCONNECT:
+  case PING:
+    assert(0 && "getMessageSize - CONNECT, VERIFY_CONNECT, DISCONNECT, PING : "
+                "Not implemented yet");
+    break;
+
+  case SEND_RELIABLE:
+  case SEND_UNRELIABLE:
+  case SEND_UNSEQUENCED:
+    msg_size += sizeof(struct message_send_raw) + msg->DataLength;
+    break;
+
+  case SEND_FRAGMENT:
+  case SEND_UNRELIABLE_FRAGMENT:
+
+    assert(0 &&
+           "getMessageSize - SEND_FRAGMENT, SEND_UNRELIABLE_FRAGMENT : Not "
+           "implemented yet");
+
+    // msg_size += sizeof(struct message_fragment_raw) + ???
+    break;
+
+  case BANDWIDTH_LIMIT:
+  case THROTTLE_CONFIGURE:
+    assert(0 && "getMessageSize - BANDWIDTH_LIMIT, THROTTLE_CONFIGURE : Not "
+                "implemented");
+    break;
+  };
+
+  return msg_size;
+}
+
+void handleSendBuff() {
+
+  int shouldStop = 0;
+
+  // atm on envois tout le temps le opt sentTime
+  const size_t packet_header_size = sizeof(struct packet_header_base_raw) +
+                                    sizeof(struct packet_header_opt_time_raw);
+
+  while (!shouldStop) {
+
+    uint8_t *packet_buffer = malloc(MAX_PKT_SIZE);
+    int pkt_payload_actual_size = 0;
+
+    /*
+           faire un offset d'au moins MAX_HEADER_SIZE ou en vrai de 8, pour etre
+           sur que le reste des structs soit alligné en mémoire
+    */
+    for (size_t i = 0; i < NB_PRIORITY; i++) {
+
+      while (G_sendMessageBuff[i].count > 0) {
+
+        struct message msg_peek = {0};
+        cb_peek(G_sendMessageBuff[i], msg_peek);
+
+        size_t msg_size = getMessageSize(&msg_peek, pkt_payload_actual_size);
+
+        if (packet_header_size + pkt_payload_actual_size + msg_size >=
+            MAX_PKT_SIZE) {
+          assert(1 && "not implemented the sending yet");
+
+          // Si c'est un send > MAX_PKT_SIZE - les headers
+          // créé les fragments
+          // remplacer le send actuel par un fragment
+          // ajouter le fragment dans le packet_buffer
+          // ajouter le reste des fragment par la head ?
+          break;
+        }
+
+        struct message msg;
+        cb_dequeue(G_sendMessageBuff[i], msg);
+
+        size_t offset = packet_header_size + pkt_payload_actual_size;
+        addMessageToRaw(packet_buffer + offset, &msg);
+
+        pkt_payload_actual_size += msg_size;
+      }
+
+      if (packet_header_size + pkt_payload_actual_size >= MAX_PKT_SIZE) {
+        // send le packet
+        printf("on send un paquet \n");
+        free(packet_buffer);
+        break;
+      }
+      if (i == NB_PRIORITY - 1) {
+        shouldStop = 1;
+        if (pkt_payload_actual_size > 0) {
+          printf("on send un paquet \n");
+        }
+        free(packet_buffer);
+      }
+    }
+  }
+}
+
 ssize_t index_of_client(int id) {
 
-  for (size_t i = 0; i < da_client.count; i++) {
-    if (da_client.items[i].peerId == id) {
+  for (size_t i = 0; i < G_da_client.count; i++) {
+    if (G_da_client.items[i].peerId == id) {
       return i;
     }
   }
@@ -365,11 +525,32 @@ ssize_t index_of_client(int id) {
 
 ssize_t index_of_poll(int fd) {
 
-  for (size_t i = 0; i < pollfds.count; i++) {
-    if (pollfds.items[i].fd == fd) {
+  for (size_t i = 0; i < G_pollfds.count; i++) {
+    if (G_pollfds.items[i].fd == fd) {
       return i;
     }
   }
 
   return -1;
+}
+
+void initMessageBuffer() {
+  for (size_t i = 0; i < NB_PRIORITY; i++) {
+    cb_init(G_recvMessageBuff[i], 1024 * 500);
+    cb_init(G_sendMessageBuff[i], 1024 * 500);
+  }
+}
+
+void freeMessageBuffer() {
+  for (size_t i = 0; i < NB_PRIORITY; i++) {
+    free(G_recvMessageBuff[i].items);
+    G_recvMessageBuff[i].count = 0;
+    G_recvMessageBuff[i].capacity = 0;
+    G_recvMessageBuff->items = NULL;
+
+    free(G_sendMessageBuff[i].items);
+    G_sendMessageBuff[i].count = 0;
+    G_sendMessageBuff[i].capacity = 0;
+    G_sendMessageBuff->items = NULL;
+  }
 }

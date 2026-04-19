@@ -10,10 +10,11 @@
 
 #include "net.h"
 
-struct cb_message recvMessageBuff;
-struct cb_message sendMessageBuff;
-struct da_client da_client = {0};
-struct da_pollfd pollfds = {0};
+// struct cb_message G_recvMessageBuff[NB_PRIORITY];
+// struct cb_message G_sendMessageBuff[NB_PRIORITY];
+
+struct da_client G_da_client = {0};
+struct da_pollfd G_pollfds = {0};
 
 int main(int argc, char **argv) {
 
@@ -36,15 +37,17 @@ int main(int argc, char **argv) {
   const int total_packet_size = sizeof(struct packet_header_base_raw) +
                                 sizeof(struct packet_header_opt_time_raw) +
                                 sizeof(struct message_base_raw) +
-                                sizeof(struct message_send_raw) + msg1_payload_size;
+                                sizeof(struct message_send_raw) +
+                                msg1_payload_size;
 
   uint8_t *send_buff = malloc(total_packet_size);
   size_t buff_it = 0;
 
-  struct packet_header_base_raw *ph = (struct packet_header_base_raw *)send_buff;
+  struct packet_header_base_raw *ph =
+      (struct packet_header_base_raw *)send_buff;
 
-  ph->PeerID = htons(1);
-  ph->PeerID |= PACKET_FLAG_SENT_TIME;
+  ph->PeerIDFlags = htons(1);
+  ph->PeerIDFlags |= PACKET_FLAG_SENT_TIME;
   ph->CommandCount = ntohs(1);
   buff_it += sizeof(*ph);
 
@@ -58,15 +61,16 @@ int main(int argc, char **argv) {
       (struct message_base_raw *)(send_buff + buff_it);
 
   msg1->CommandFlags = SEND_RELIABLE | MESSAGE_FLAG_ACKNOWLEDGE;
-  msg1->ChannelID = 1;
+  msg1->ChannelIDFlags = 22;
   msg1->ReliableSeqNumber = htons(2200);
   buff_it += sizeof(*msg1);
 
-  struct message_send_raw* msg1_part2 = (struct message_send_raw*)(msg1->message_part2);
+  struct message_send_raw *msg1_part2 =
+      (struct message_send_raw *)(msg1->message_part2);
   msg1_part2->DataLength = htonl(msg1_payload_size);
   memcpy(msg1_part2->payload, msg1_payload, msg1_payload_size);
 
-  buff_it += sizeof(*msg1_part2) + msg1_payload_size ;
+  buff_it += sizeof(*msg1_part2) + msg1_payload_size;
 
   printf("total_packet_size %d\n", total_packet_size);
   printf("buff_it %ld\n", buff_it);
@@ -75,7 +79,6 @@ int main(int argc, char **argv) {
   printf("n %ld\n", n);
 
   close(fd);
-
 
   return 0;
 }

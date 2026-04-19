@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,16 +15,39 @@
 
 #include "net.h"
 
-int handleRecvMessage();
-int handleSendMessage();
-int setThisFuckinkSocket();
+int handleSendMessage(struct cb_message *cb_msg);
 
-struct cb_message recvMessageBuff;
-struct cb_message sendMessageBuff;
-struct da_client da_client = {0};
-struct da_pollfd pollfds = {0};
+int server_accept(struct pollfd s_pfd);
+int setDefaultServerSocket();
 
-int servFd = -1;
+struct da_pollfd G_pollfds = {0};
+
+int net_poll(struct message *msg_out) {
+
+  for (size_t priority = 0; priority < NB_PRIORITY; priority++) {
+
+    while (G_recvMessageBuff[priority].count > 0) {
+
+      cb_dequeue(G_recvMessageBuff[priority], (*msg_out));
+
+      // TODO : si c'est un ack , un connect etc on doit le gerer nous meme
+      switch (msg_out->Command) {
+      CONNECT:
+      VERIFY_CONNECT:
+        break;
+
+      ACKNOWLEDGE:
+        break;
+
+      default:
+        return 1;
+      }
+    }
+  }
+
+  net_handleSendBuff();
+  return 0;
+}
 
 // --------------------------------------------------
 // MAIN Function
@@ -31,54 +55,77 @@ int servFd = -1;
 
 int main(int argc, char **argv) {
 
+  void initMessageBuffer();
+
   // -- Set-up socket
-  int servFd = setThisFuckinkSocket();
+  int servFd = setDefaultServerSocket();
+
+  if (servFd == SOCK_ERR) {
+    perror("impossible to create the socket");
+  }
 
   // -- setup before infinite loop
-  struct pollfd pfd = {.fd = servFd, .events = POLLIN};
-  da_append(pollfds, pfd);
+  struct pollfd server_pfd = {.fd = servFd, .events = POLLIN};
+  da_append(G_pollfds, server_pfd);
 
   printf("listening on port '%d'\n", PORT);
 
   // -- start infinite loop
   while (1) {
 
-    // Waiting for incoming message
-    if (poll(pollfds.items, pollfds.count, -1) == -1) {
-      perror("error whil poll-ing");
-    }
+    server_pfd = G_pollfds.items[0];
 
-    server_accept();
+    // Waiting for incoming message
+    if (poll(G_pollfds.items, G_pollfds.count, -1) == -1) {
+      perror("error while poll-ing");
+    }
 
     // -----------------------
     // Traitement message reçu
     // -----------------------
 
-    read_and_enqueue_message();
+    int client_fd = server_accept(server_pfd);
 
-    // TODO on traitera par batch plus tard, atm, on traite tant qu'il y a à
-    // traiter
-    while (handleRecvMessage())
-      ;
+    if (client_fd >= 0) {
 
-    // -----------------------
-    // Traitement message à envoyer
-    // -----------------------
-    // TODO on traitera par batch plus tard, atm, on traite tant qu'il y a à
-    // traiter
-    while (handleSendMessage())
-      ;
+      printf("\nnew connection, fd : '%d'\n", client_fd);
+
+      struct client c = {.peerId = client_fd};
+      da_append(G_da_client, c);
+
+      struct pollfd pfd = {
+          .fd = client_fd, .events = POLLIN, .revents = POLLIN};
+      da_append(G_pollfds, pfd);
+
+    } else if (client_fd == -1) {
+      fprintf(stderr, "poll error\n");
+    } else if (client_fd == -2) {
+      perror("error while accepting new client");
+    } else {
+      fprintf(stderr, "y'a une error wallah\n");
+    }
+
+    net_handle_io();
+
+    // ------------------------------
+    // Traitement des messages queues
+    // ------------------------------
+
+    struct message msg;
+    while ((net_poll(&msg))) {
+    }
   }
+
+  freeMessageBuffer();
 
   return 0;
 }
 
 // --------------------
 
-int setThisFuckinkSocket() {
+int setDefaultServerSocket() {
   int serv_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (serv_fd == SOCK_ERR) {
-    perror("impossible to create socket");
     return SOCK_ERR;
   }
 
@@ -91,132 +138,52 @@ int setThisFuckinkSocket() {
   };
 
   if (bind(serv_fd, (const struct sockaddr *)&addr, sizeof(addr)) == SOCK_ERR) {
-    perror("impossible to bind socket");
     return SOCK_ERR;
   }
 
   if (listen(serv_fd, BACKLOG) == SOCK_ERR) {
-    perror("impossible to listen the socket");
     return SOCK_ERR;
   }
 
   return serv_fd;
 }
 
-/// @return false (0) on failure
-int handleRecvMessage() {
+/// @brief accept new connexion and add the new client to the G_pollfds
+// @param server_pfd if you don't use poll(), you can construct the `struct
+// pollfd` with `.fd` equals to the server fd, and `.revents = POLLIN`
+// @return the fd of the new connexion, 0 if no new connexion (.revents=0) and
+// negative if an error occured
+int server_accept(struct pollfd s_pfd) {
 
-  if (recvMessageBuff.count <= 0)
+  assert(s_pfd.fd >= 0);
+
+  if (s_pfd.revents == 0) {
     return 0;
-
-  struct message msg;
-  cb_dequeue(recvMessageBuff, msg);
-
-  switch (msg.Command) {
-  case ACKNOWLEDGE:
-    assert(1 && "Not implemented yet");
-    // TODO : faire une liste de packet devant etre ack
-    // lorsque l'on recoit un ack, on cherche dans la liste, et on la tej de la
-    // liste
-    break;
-
-  case CONNECT: {
-    assert(1 && "CONNECT : Not implemented yet");
-
-    // TODO mettre dans le buff "outMessagebuff"
-  } break;
-
-  case DISCONNECT:
-  case PING:
-    assert(1 && "DISCONNECT & PING : Not implemented yet");
-    break;
-
-  case SEND_RELIABLE:
-  case SEND_UNRELIABLE:
-  case SEND_UNSEQUENCED:
-    printf("traitement d'un msg ayant pour command 'SEND_RELIABLE', "
-           "'SEND_UNRELIABLE' ou 'SEND_FRAGMENT'\n ");
-    assert(1 && "SEND_XXX : Not implemented yet");
-
-    break;
-
-  case SEND_FRAGMENT:
-  case SEND_UNRELIABLE_FRAGMENT:
-    // TODO : faudra memcpy dans un cache le temps d'assembler tout les
-    // fragments
-    assert(1 && "FRAGMENT & UNRELIABLE_FRAGMENT : Not implemented yet");
-    break;
-
-  case BANDWIDTH_LIMIT:
-  case THROTTLE_CONFIGURE:
-    assert(1 && "BANDWIDTH_LIMIT & THROTTLE_CONFIGURE : Not implemented");
-
-  default:
-  case VERIFY_CONNECT:
-    break;
-  };
-
-  if (msg.payload != NULL) {
-    free(msg.payload);
-    msg.payload = NULL;
   }
 
-  return 1;
-}
+  if ((s_pfd.revents & POLLIN) == 0) {
+    fprintf(stderr,
+            "le ServFd à été trigger par poll(), mais n'est pas en POLLIN\n"
+            "\trevent = %d\n",
+            s_pfd.revents);
+    return -1;
+  }
 
-/// @return false (0) on failure
+  // udp :
+  // ssize_t n = recvfrom(fd, (&(uint8_t){1}), 1, MSG_DONTWAIT | MSG_PEEK,
+  // NULL, NULL);
 
-int handleSendMessage() {
+  int client_fd = accept(s_pfd.fd, NULL, NULL);
 
-  if (sendMessageBuff.count <= 0)
-    return 0;
+  if (client_fd == SOCK_ERR) {
+    if (client_fd == EWOULDBLOCK || client_fd == EAGAIN) {
+      return 0;
+    }
 
-  struct message msg;
-  cb_dequeue(sendMessageBuff, msg);
+    return -2;
+  }
 
-  switch (msg.Command) {
-  case ACKNOWLEDGE:
-    assert(1 && "Not implemented yet");
-    // TODO : faire une liste de packet devant etre ack
-    // lorsque l'on recoit un ack, on cherche dans la liste, et on la tej de la
-    // liste
-    break;
+  // readPacket(client_fd);
 
-  case CONNECT: {
-    assert(1 && "CONNECT : Not implemented yet");
-
-    // TODO mettre dans le buff "outMessagebuff"
-  } break;
-
-  case DISCONNECT:
-  case PING:
-    assert(1 && "DISCONNECT & PING : Not implemented yet");
-    break;
-
-  case SEND_RELIABLE:
-  case SEND_UNRELIABLE:
-  case SEND_UNSEQUENCED:
-    printf("traitement d'un msg ayant pour command 'SEND_RELIABLE', "
-           "'SEND_UNRELIABLE' ou 'SEND_FRAGMENT'\n ");
-    assert(1 && "SEND_XXX : Not implemented yet");
-
-    break;
-
-  case SEND_FRAGMENT:
-  case SEND_UNRELIABLE_FRAGMENT:
-    // TODO : faudra memcpy dans un cache le temps d'assembler tout les
-    // fragments
-    assert(1 && "FRAGMENT & UNRELIABLE_FRAGMENT : Not implemented yet");
-    break;
-
-  case BANDWIDTH_LIMIT:
-  case THROTTLE_CONFIGURE:
-    assert(1 && "BANDWIDTH_LIMIT & THROTTLE_CONFIGURE : Not implemented");
-
-  default:
-  case VERIFY_CONNECT:
-    break;
-  };
-
-  return 1;
+  return client_fd;
 }
