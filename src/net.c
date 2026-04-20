@@ -1,14 +1,16 @@
 
-#include <asm-generic/errno.h>
+#include <asm-generic/errno-base.h>
 #include <assert.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <stdalign.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 
 #include "net.h"
 
@@ -22,10 +24,16 @@ int readPacket(int fd);
 ssize_t readPacketHeader(int fd, struct packet_header *ph_out);
 size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph_out);
 
-size_t parseMessage(unsigned char *buff, size_t buff_size,
-                    struct message *msg_out);
-size_t parseMessageHeader(unsigned char *buff, size_t buff_size,
-                          struct message *msg_out);
+size_t parseMessageRaw(unsigned char *buff, size_t buff_size,
+                       struct message *msg_out);
+size_t parseMessageHeaderRaw(unsigned char *buff, size_t buff_size,
+                             struct message *msg_out);
+
+ssize_t readEntirePayload(int fd, uint8_t **buff_out);
+
+size_t getMessageSize(struct message *msg, size_t packet_header_size,
+                      size_t payload_actual_size);
+
 void handleSendBuff();
 
 // -----
@@ -37,9 +45,11 @@ ssize_t readEntirePayload(int fd, uint8_t **buff_out) {
 
   ssize_t recv_return_value = 0;
   size_t multiplicator = 1;
-  const size_t alloc_per_loop = 1024;
 
-  // On incrémente de 1024 en 1024 jusqu'a avoir la tout le payload
+  const size_t alloc_per_loop = 2048;
+  const size_t max_multiplicator = 50;
+
+  // On incrémente de 2048 en 2048 jusqu'a avoir tout le payload
   do {
 
     payload_buff = realloc(payload_buff, alloc_per_loop * multiplicator);
@@ -49,15 +59,21 @@ ssize_t readEntirePayload(int fd, uint8_t **buff_out) {
 
     total_payload_size += recv_return_value;
     multiplicator++;
-  } while (recv_return_value == alloc_per_loop && multiplicator <= 100);
+  } while (recv_return_value == alloc_per_loop &&
+           multiplicator <= max_multiplicator);
+
+  multiplicator--;
 
   // If we go over 100Ko, we're not reading this sheisse
-  if (multiplicator > 100) {
+  if (multiplicator >= max_multiplicator) {
     fprintf(
         stderr,
         "%s : Error while allocating memory for payload, payload >= 100Ko\n",
         __FUNCTION__);
-    free(payload_buff);
+
+    while (recv(fd, payload_buff, alloc_per_loop * multiplicator, 0) != 0) {
+      free(payload_buff);
+    }
 
     // TODO : flush the recv
 
@@ -67,7 +83,7 @@ ssize_t readEntirePayload(int fd, uint8_t **buff_out) {
   // Check there is a problem
   if (recv_return_value == -1) {
     total_payload_size++;
-    if (errno != EWOULDBLOCK) {
+    if (errno != EWOULDBLOCK || errno != EAGAIN) {
       perror("Error while recv-ing payload");
       free(payload_buff);
       return -2;
@@ -79,10 +95,10 @@ ssize_t readEntirePayload(int fd, uint8_t **buff_out) {
   return total_payload_size;
 }
 
-size_t parseMessage(unsigned char *buff, size_t buff_size,
-                    struct message *msg_out) {
+size_t parseMessageRaw(unsigned char *buff, size_t buff_size,
+                       struct message *msg_out) {
 
-  size_t header_size = parseMessageHeader(buff, buff_size, msg_out);
+  size_t header_size = parseMessageHeaderRaw(buff, buff_size, msg_out);
 
   if (header_size == 0) {
     return 0;
@@ -232,13 +248,15 @@ int readPacket(int fd) {
 
     struct message msg = {0};
     size_t parse_size =
-        parseMessage(payload_buff + read_payload, total_payload_size, &msg);
+        parseMessageRaw(payload_buff + read_payload, total_payload_size, &msg);
 
     if (parse_size < 0) {
       assert(1 && "impossible to read or parse the message");
     }
 
     read_payload += parse_size;
+
+    printf("enque-ing\n");
 
     cb_enqueue(G_recvMessageBuff[(msg.ChannelID & CHANNEL_FLAG_MASK) >>
                                  CHANNEL_FLAG_OFFSET],
@@ -256,17 +274,16 @@ int readPacket(int fd) {
 }
 
 void net_handle_io() {
-
   for (size_t i = 0; i < G_pollfds.count; i++) {
     if (G_pollfds.items[i].revents & POLLIN) {
-      printf("\nnew message from '%d'\n", G_pollfds.items[i].fd);
+      // printf("\nnew message from '%d'\n", G_pollfds.items[i].fd);
       readPacket(G_pollfds.items[i].fd);
     }
   }
 }
 
-size_t parseMessageHeader(unsigned char *message_buff, size_t buff_size,
-                          struct message *msg_out) {
+size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
+                             struct message *msg_out) {
 
   if (buff_size < sizeof(struct message_base_raw)) {
     return 0;
@@ -274,7 +291,7 @@ size_t parseMessageHeader(unsigned char *message_buff, size_t buff_size,
 
   size_t actual_header_size = 0;
 
-  uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
+  alignas(struct message_base_raw) uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
   struct message_base_raw *read_msg = (struct message_base_raw *)internal_buff;
 
   memcpy(read_msg, message_buff, sizeof(*read_msg));
@@ -285,7 +302,7 @@ size_t parseMessageHeader(unsigned char *message_buff, size_t buff_size,
   msg_out->Command = (read_msg->CommandFlags & (MESSAGE_FLAG_MASK ^ 0xFF));
 
   // -- channel_id
-  msg_out->priority = read_msg->ChannelIDFlags & CHANNEL_FLAG_MASK;
+  msg_out->priorityFlag = read_msg->ChannelIDFlags & CHANNEL_FLAG_MASK;
   msg_out->ChannelID = read_msg->ChannelIDFlags & (CHANNEL_FLAG_MASK ^ 0xFFFF);
 
   // -- seq_number
@@ -385,7 +402,8 @@ size_t parsePacketHeader(unsigned char *packet_buff,
 
   size_t offset_readed = 0;
 
-  uint8_t internal_buff[MAX_PKT_HEADER_SIZE];
+  alignas(struct packet_header_base_raw)
+      uint8_t internal_buff[MAX_PKT_HEADER_SIZE];
   struct packet_header_base_raw *read_msg =
       (struct packet_header_base_raw *)internal_buff;
 
@@ -406,7 +424,8 @@ size_t parsePacketHeader(unsigned char *packet_buff,
   return offset_readed;
 }
 
-size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
+size_t getMessageSize(struct message *msg, size_t packet_header_size,
+                      size_t payload_actual_size) {
   size_t msg_size = sizeof(struct message_base_raw);
 
   switch (msg->Command) {
@@ -429,14 +448,20 @@ size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
     break;
 
   case SEND_FRAGMENT:
-  case SEND_UNRELIABLE_FRAGMENT:
+  case SEND_UNRELIABLE_FRAGMENT: {
+
+    const size_t header_fragment =
+        sizeof(struct message_base_raw) + sizeof(struct message_fragment_raw);
+
+    msg_size += MAX_PKT_SIZE - packet_header_size - payload_actual_size -
+                header_fragment;
 
     assert(0 &&
            "getMessageSize - SEND_FRAGMENT, SEND_UNRELIABLE_FRAGMENT : Not "
            "implemented yet");
 
     // msg_size += sizeof(struct message_fragment_raw) + ???
-    break;
+  } break;
 
   case BANDWIDTH_LIMIT:
   case THROTTLE_CONFIGURE:
@@ -448,9 +473,77 @@ size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
   return msg_size;
 }
 
+size_t addMessageToPacketRaw(uint8_t *buff, struct message *msg) {
+
+  size_t header_size = 0;
+
+  alignas(struct message_base_raw) uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
+
+  struct message_base_raw *msg_raw = (struct message_base_raw *)internal_buff;
+  header_size += sizeof(*msg_raw);
+
+  msg_raw->CommandFlags = msg->Command | msg->flags;
+  msg_raw->ChannelIDFlags = msg->ChannelID | msg->priorityFlag;
+
+  msg_raw->seq_number = htons(msg->seq_number);
+
+  switch (msg->Command) {
+
+  case ACKNOWLEDGE: {
+    struct message_ack_raw *msg_ack =
+        (struct message_ack_raw *)msg_raw + header_size;
+    header_size += sizeof(*msg_ack);
+    msg_ack->ReceivedSentTime = htons(msg->ReceivedSentTime);
+    memcpy(buff, msg_raw, header_size);
+
+  } break;
+
+  case CONNECT:
+  case VERIFY_CONNECT:
+  case DISCONNECT:
+  case PING:
+    assert(0 && "sending of CONNECT, VERIFY_CONNECT, DISCONNECT, PING Not "
+                "implemented yet");
+    break;
+
+  case SEND_RELIABLE:
+  case SEND_UNRELIABLE:
+  case SEND_UNSEQUENCED: {
+    struct message_send_raw *msg_send =
+        (struct message_send_raw *)msg_raw + header_size;
+    header_size += sizeof(*msg_send);
+    msg_send->DataLength = htons(msg->ReceivedSentTime);
+
+    memcpy(buff, msg_raw, header_size);
+    memcpy(buff + header_size, msg->payload, msg_send->DataLength);
+    free(msg->payload);
+  } break;
+
+    break;
+  case BANDWIDTH_LIMIT:
+  case THROTTLE_CONFIGURE:
+    assert(0 && "sending of CONNECT, VERIFY_CONNECT, DISCONNECT, PING Not "
+                "implemented yet");
+
+    break;
+  case SEND_FRAGMENT:
+  case SEND_UNRELIABLE_FRAGMENT:
+    assert(0 && "sending of CONNECT, VERIFY_CONNECT, DISCONNECT, PING Not "
+                "implemented yet");
+    break;
+
+  default:
+    assert(0 && "UNREACHABLE POINT HIT");
+  }
+
+  return header_size;
+}
+
 void handleSendBuff() {
 
   int shouldStop = 0;
+
+  int shouldSendPacket = 1;
 
   // atm on envois tout le temps le opt sentTime
   const size_t packet_header_size = sizeof(struct packet_header_base_raw) +
@@ -458,58 +551,137 @@ void handleSendBuff() {
 
   while (!shouldStop) {
 
+      // printf("boucle packet\n");
+
     uint8_t *packet_buffer = malloc(MAX_PKT_SIZE);
+    uint8_t *packet_payload = packet_buffer + MAX_PKT_HEADER_SIZE;
     int pkt_payload_actual_size = 0;
 
     /*
-           faire un offset d'au moins MAX_HEADER_SIZE ou en vrai de 8, pour etre
-           sur que le reste des structs soit alligné en mémoire
+           pour gerer le sentTime
+           faire un offset d'au moins MAX_HEADER_SIZE
+           et construire le packet header juste avant l'envois
     */
     for (size_t i = 0; i < NB_PRIORITY; i++) {
+        // printf("\tboucle priority %ld\n", i);
+
 
       while (G_sendMessageBuff[i].count > 0) {
+          // printf("\tboucle count > 0\n");
+
 
         struct message msg_peek = {0};
         cb_peek(G_sendMessageBuff[i], msg_peek);
 
-        size_t msg_size = getMessageSize(&msg_peek, pkt_payload_actual_size);
+        size_t msg_size = getMessageSize(&msg_peek, packet_header_size,
+                                         pkt_payload_actual_size);
 
-        if (packet_header_size + pkt_payload_actual_size + msg_size >=
+        if (packet_header_size + pkt_payload_actual_size + msg_size >
             MAX_PKT_SIZE) {
-          assert(1 && "not implemented the sending yet");
 
-          // Si c'est un send > MAX_PKT_SIZE - les headers
-          // créé les fragments
-          // remplacer le send actuel par un fragment
-          // ajouter le fragment dans le packet_buffer
-          // ajouter le reste des fragment par la head ?
+          if (msg_peek.Command == SEND_RELIABLE ||
+              msg_peek.Command == SEND_UNSEQUENCED ||
+              msg_peek.Command == SEND_UNRELIABLE) {
+
+            const size_t send_msg_header_size =
+                sizeof(struct message_base_raw) +
+                sizeof(struct message_send_raw);
+
+            if (msg_size >
+                MAX_PKT_SIZE - packet_header_size - send_msg_header_size) {
+              // créer les fragments
+              // remplacer le send actuel par un fragment
+              // ajouter le fragment dans le packet_buffer
+              // ajouter les fragment dans le sendBuffer OU les envoyer direct ?
+
+              assert(1 && "not implemented the fragment send yet");
+            }
+          }
+
+          // assert(1 && "not implemented the sending yet");
+          shouldSendPacket = 1;
           break;
         }
 
         struct message msg;
         cb_dequeue(G_sendMessageBuff[i], msg);
 
-        size_t offset = packet_header_size + pkt_payload_actual_size;
-        addMessageToRaw(packet_buffer + offset, &msg);
+        size_t msg_raw_wrote =
+            addMessageToPacketRaw(packet_payload + pkt_payload_actual_size, &msg);
 
-        pkt_payload_actual_size += msg_size;
+
+        pkt_payload_actual_size += msg_raw_wrote;
       }
 
-      if (packet_header_size + pkt_payload_actual_size >= MAX_PKT_SIZE) {
-        // send le packet
-        printf("on send un paquet \n");
-        free(packet_buffer);
-        break;
-      }
       if (i == NB_PRIORITY - 1) {
         shouldStop = 1;
         if (pkt_payload_actual_size > 0) {
           printf("on send un paquet \n");
+
+          size_t begin_header = MAX_PKT_HEADER_SIZE - packet_header_size;
+          alignas(struct packet_header_base_raw) uint8_t buff[MAX_PKT_HEADER_SIZE];
+
+          struct packet_header_base_raw *ph = (struct packet_header_base_raw *)buff;
+          ph->PeerIDFlags =
+              // MDR : faut faier un da (ou hmap) de bucket queue. 1 par client
+              // ou alors non, mais faut grere chq client par priorité, pour créé un packet différent par client.
+
+          memcpy(packet_buffer + begin_header, ph, packet_header_size);
+
         }
+
         free(packet_buffer);
+
+      }
+      else if (shouldSendPacket) {
+        // send le packet
+        printf("on send un paquet \n");
+        free(packet_buffer);
+        shouldSendPacket = 0;
+        break;
       }
     }
   }
+}
+
+int net_poll(struct message *msg_out) {
+
+  for (size_t priority = 0; priority < NB_PRIORITY; priority++) {
+
+        printf("%s() boucle priority %ld\n", __FUNCTION__, priority);
+    while (G_recvMessageBuff[priority].count > 0) {
+        printf("%s() boucle count > 0\n", __FUNCTION__);
+
+      cb_dequeue(G_recvMessageBuff[priority], (*msg_out));
+
+
+      if (msg_out->flags & MESSAGE_FLAG_ACKNOWLEDGE) {
+
+          printf("%s() MESSAGE_FLAG_ACKNOWLEDGE\n", __FUNCTION__);
+
+        struct message m = {.ChannelID = msg_out->ChannelID,
+                            .Command = msg_out->Command,
+                            .ReceivedSeqNumber = msg_out->seq_number,
+                            .ReceivedSentTime =
+                                msg_out->packet_header.SentTime};
+
+        cb_enqueue(G_sendMessageBuff[priority], m);
+      }
+
+      switch (msg_out->Command) {
+      CONNECT:
+      VERIFY_CONNECT:
+        break;
+
+      ACKNOWLEDGE:
+      default:
+        return 1;
+      }
+    }
+  }
+
+  handleSendBuff();
+  return 0;
 }
 
 ssize_t index_of_client(int id) {
@@ -536,8 +708,8 @@ ssize_t index_of_poll(int fd) {
 
 void initMessageBuffer() {
   for (size_t i = 0; i < NB_PRIORITY; i++) {
-    cb_init(G_recvMessageBuff[i], 1024 * 500);
-    cb_init(G_sendMessageBuff[i], 1024 * 500);
+    cb_init(G_recvMessageBuff[i], 1024 * 10);
+    cb_init(G_sendMessageBuff[i], 1024 * 10);
   }
 }
 

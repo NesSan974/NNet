@@ -24,7 +24,6 @@
 #define MIN_MSG_HEADER_SIZE (6)
 #define MAX_MSG_HEADER_SIZE (32)
 
-
 #ifndef PORT
 #define PORT 2202
 #endif
@@ -57,6 +56,7 @@
 
 #define cb_init(cb, fixed_size)                                                \
   do {                                                                         \
+    cb.count = 0;                                                              \
     cb.capacity = fixed_size;                                                  \
     cb.items = malloc(fixed_size);                                             \
   } while (0)
@@ -149,7 +149,7 @@ struct message {
   };
   unsigned char isDisable;
   uint8_t flags;
-  unsigned char priority;
+  unsigned char priorityFlag;
 
   struct packet_header packet_header;
   // --
@@ -258,7 +258,6 @@ void freeMessageBuffer();
 
 void net_handle_io();
 int server_accept(struct pollfd s_pfd);
-ssize_t readEntirePayload(int fd, uint8_t **buff_out);
 
 int net_poll(struct message *msg_out);
 

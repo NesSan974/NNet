@@ -22,32 +22,6 @@ int setDefaultServerSocket();
 
 struct da_pollfd G_pollfds = {0};
 
-int net_poll(struct message *msg_out) {
-
-  for (size_t priority = 0; priority < NB_PRIORITY; priority++) {
-
-    while (G_recvMessageBuff[priority].count > 0) {
-
-      cb_dequeue(G_recvMessageBuff[priority], (*msg_out));
-
-      // TODO : si c'est un ack , un connect etc on doit le gerer nous meme
-      switch (msg_out->Command) {
-      CONNECT:
-      VERIFY_CONNECT:
-        break;
-
-      ACKNOWLEDGE:
-        break;
-
-      default:
-        return 1;
-      }
-    }
-  }
-
-  net_handleSendBuff();
-  return 0;
-}
 
 // --------------------------------------------------
 // MAIN Function
@@ -55,7 +29,8 @@ int net_poll(struct message *msg_out) {
 
 int main(int argc, char **argv) {
 
-  void initMessageBuffer();
+  initMessageBuffer();
+
 
   // -- Set-up socket
   int servFd = setDefaultServerSocket();
@@ -113,6 +88,8 @@ int main(int argc, char **argv) {
 
     struct message msg;
     while ((net_poll(&msg))) {
+
+        printf("packet returned from net_poll()\n");
     }
   }
 
