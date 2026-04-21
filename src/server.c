@@ -17,20 +17,16 @@
 
 int handleSendMessage(struct cb_message *cb_msg);
 
-int server_accept(struct pollfd s_pfd);
+int server_accept(struct pollfd *s_pfd);
 int setDefaultServerSocket();
 
 struct da_pollfd G_pollfds = {0};
-
 
 // --------------------------------------------------
 // MAIN Function
 // --------------------------------------------------
 
 int main(int argc, char **argv) {
-
-  initMessageBuffer();
-
 
   // -- Set-up socket
   int servFd = setDefaultServerSocket();
@@ -40,20 +36,23 @@ int main(int argc, char **argv) {
   }
 
   // -- setup before infinite loop
-  struct pollfd server_pfd = {.fd = servFd, .events = POLLIN};
-  da_append(G_pollfds, server_pfd);
+  {
+    struct pollfd server_pfd_item = {.fd = servFd, .events = POLLIN};
+    da_append(G_pollfds, server_pfd_item);
+  }
+
+  struct pollfd *server_pfd;
 
   printf("listening on port '%d'\n", PORT);
 
   // -- start infinite loop
   while (1) {
 
-    server_pfd = G_pollfds.items[0];
-
     // Waiting for incoming message
     if (poll(G_pollfds.items, G_pollfds.count, -1) == -1) {
       perror("error while poll-ing");
     }
+    server_pfd = &G_pollfds.items[0];
 
     // -----------------------
     // Traitement message reçu
@@ -61,23 +60,19 @@ int main(int argc, char **argv) {
 
     int client_fd = server_accept(server_pfd);
 
-    if (client_fd >= 0) {
+    if (client_fd > 0) {
 
       printf("\nnew connection, fd : '%d'\n", client_fd);
 
-      struct client c = {.peerId = client_fd};
-      da_append(G_da_client, c);
+      addClient(&((struct client){.peerId = client_fd}));
 
-      struct pollfd pfd = {
-          .fd = client_fd, .events = POLLIN, .revents = POLLIN};
+      struct pollfd pfd = {.fd = client_fd, .events = POLLIN, .revents = POLLIN};
       da_append(G_pollfds, pfd);
 
     } else if (client_fd == -1) {
       fprintf(stderr, "poll error\n");
     } else if (client_fd == -2) {
       perror("error while accepting new client");
-    } else {
-      fprintf(stderr, "y'a une error wallah\n");
     }
 
     net_handle_io();
@@ -88,15 +83,14 @@ int main(int argc, char **argv) {
 
     struct message msg;
     while ((net_poll(&msg))) {
-
-        printf("packet returned from net_poll()\n");
+      printf("packet returned from net_poll()\n");
     }
   }
 
-  freeMessageBuffer();
-
+  // TODO De-allocate client da
   return 0;
 }
+
 
 // --------------------
 
@@ -130,19 +124,19 @@ int setDefaultServerSocket() {
 // pollfd` with `.fd` equals to the server fd, and `.revents = POLLIN`
 // @return the fd of the new connexion, 0 if no new connexion (.revents=0) and
 // negative if an error occured
-int server_accept(struct pollfd s_pfd) {
+int server_accept(struct pollfd *s_pfd) {
 
-  assert(s_pfd.fd >= 0);
+  assert(s_pfd->fd >= 0);
 
-  if (s_pfd.revents == 0) {
+  if (s_pfd->revents == 0) {
     return 0;
   }
 
-  if ((s_pfd.revents & POLLIN) == 0) {
+  if ((s_pfd->revents & POLLIN) == 0) {
     fprintf(stderr,
             "le ServFd à été trigger par poll(), mais n'est pas en POLLIN\n"
             "\trevent = %d\n",
-            s_pfd.revents);
+            s_pfd->revents);
     return -1;
   }
 
@@ -150,7 +144,7 @@ int server_accept(struct pollfd s_pfd) {
   // ssize_t n = recvfrom(fd, (&(uint8_t){1}), 1, MSG_DONTWAIT | MSG_PEEK,
   // NULL, NULL);
 
-  int client_fd = accept(s_pfd.fd, NULL, NULL);
+  int client_fd = accept(s_pfd->fd, NULL, NULL);
 
   if (client_fd == SOCK_ERR) {
     if (client_fd == EWOULDBLOCK || client_fd == EAGAIN) {
@@ -160,7 +154,7 @@ int server_accept(struct pollfd s_pfd) {
     return -2;
   }
 
-  // readPacket(client_fd);
+  s_pfd->revents = 0;
 
   return client_fd;
 }

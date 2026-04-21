@@ -1,5 +1,5 @@
 
-
+# cd ${0%/*}
 .PHONY : all server client clean
 
 all : server client
@@ -12,7 +12,7 @@ clean :
 	rm -v build/obj/net.o build/server build/client
 
 build/server : build/obj/net.o src/server.c
-	gcc -o $@ build/obj/net.o src/server.c  -Iinclude
+	gcc -o $@ src/server.c  build/obj/net.o -Iinclude
 
 build/obj/net.o :
 	gcc -o $@ -c src/net.c -Iinclude

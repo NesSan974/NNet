@@ -1,6 +1,7 @@
 #ifndef __net_H__
 #define __net_H__
 
+#include <netinet/in.h>
 #include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -9,14 +10,24 @@
 // --------------------------------------------------
 // DEFINE ZONE
 // --------------------------------------------------
+// #define CLIENT_TO_KEY(client) (((client).addr.sin_addr.s_addr >> 24) | ((client).addr.sin_port <<
+// 8))
+
+// ASKIP au bout de 300 entré ca va faire pas mal de collision
+#define MIX32(x) ((x) ^ ((x) >> 16))
+#define ADDR_TO_KEY(addr)                                                                          \
+  ((uint16_t)MIX32((uint32_t)(addr).sin_addr.s_addr ^                                              \
+                   (((uint32_t)(addr).sin_port << 16) | (addr).sin_port)))
+
 #define SOCK_ERR (-1)
 #define POLLING_ERROR (-1)
 
 #define MAX_MTU_SIZE (1400)
 
-#define UDP_HEADER_SIZE (4)
-
-#define MAX_PKT_SIZE (1400 - UDP_HEADER_SIZE)
+// MTU ~= 1500, (sur ADSL en Wi-Fi MTU = 1 468 octets.) auquel on enleve header ip et header udp
+// - ip header taille variable jusqu'a max 60octets
+// - header udp 8 octets
+#define MAX_PKT_SIZE (1400)
 
 #define MAX_PKT_HEADER_SIZE (16)
 #define MIN_PKT_HEADER_SIZE (4)
@@ -34,16 +45,17 @@
 
 // -- define dynamic array
 
-#define da_append(da, item)                                                    \
-  do {                                                                         \
-    if (da.count >= da.capacity) {                                             \
-      if (da.capacity == 0)                                                    \
-        da.capacity = 256;                                                     \
-      else                                                                     \
-        da.capacity *= 2;                                                      \
-      da.items = realloc(da.items, da.capacity * sizeof(*da.items));           \
-    }                                                                          \
-    da.items[da.count++] = item;                                               \
+#define da_append(da, item)                                                                        \
+  do {                                                                                             \
+    if (da.count >= da.capacity) {                                                                 \
+      if (da.capacity == 0)                                                                        \
+        da.capacity = 256;                                                                         \
+      else                                                                                         \
+        da.capacity *= 2;                                                                          \
+      da.items = realloc(da.items, da.capacity * sizeof(*da.items));                               \
+      assert(da.items != NULL);                                                                    \
+    }                                                                                              \
+    da.items[da.count++] = item;                                                                   \
   } while (0)
 
 // --------------------------------------------------
@@ -54,36 +66,36 @@
 
 // -- define circular buffer
 
-#define cb_init(cb, fixed_size)                                                \
-  do {                                                                         \
-    cb.count = 0;                                                              \
-    cb.capacity = fixed_size;                                                  \
-    cb.items = malloc(fixed_size);                                             \
+#define cb_init(cb, fixed_size)                                                                    \
+  do {                                                                                             \
+    cb.count = 0;                                                                                  \
+    cb.capacity = fixed_size;                                                                      \
+    cb.items = malloc(fixed_size * sizeof(*cb.items));                                             \
   } while (0)
 
-#define cb_enqueue(cb, item)                                                   \
-  do {                                                                         \
-    if (cb.count < cb.capacity) {                                              \
-      cb.items[cb.tail] = item;                                                \
-      cb.tail = (cb.tail + 1) % cb.capacity;                                   \
-      cb.count++;                                                              \
-    }                                                                          \
+#define cb_enqueue(cb, item)                                                                       \
+  do {                                                                                             \
+    if (cb.count < cb.capacity) {                                                                  \
+      cb.items[cb.tail] = item;                                                                    \
+      cb.tail = (cb.tail + 1) % cb.capacity;                                                       \
+      cb.count++;                                                                                  \
+    }                                                                                              \
   } while (0)
 
-#define cb_dequeue(cb, out)                                                    \
-  do {                                                                         \
-    if (cb.count > 0) {                                                        \
-      out = cb.items[cb.head];                                                 \
-      cb.head = (cb.head + 1) % cb.capacity;                                   \
-      cb.count--;                                                              \
-    }                                                                          \
+#define cb_dequeue(cb, out)                                                                        \
+  do {                                                                                             \
+    if (cb.count > 0) {                                                                            \
+      out = cb.items[cb.head];                                                                     \
+      cb.head = (cb.head + 1) % cb.capacity;                                                       \
+      cb.count--;                                                                                  \
+    }                                                                                              \
   } while (0)
 
-#define cb_peek(cb, out)                                                       \
-  do {                                                                         \
-    if (cb.count > 0) {                                                        \
-      out = cb.items[cb.head];                                                 \
-    }                                                                          \
+#define cb_peek(cb, out)                                                                           \
+  do {                                                                                             \
+    if (cb.count > 0) {                                                                            \
+      out = cb.items[cb.head];                                                                     \
+    }                                                                                              \
   } while (0)
 
 // -- enum
@@ -98,9 +110,6 @@ enum flag {
   MESSAGE_FLAG_UNSEQUENCED = (1 << 6),
   MESSAGE_FLAG_MASK = MESSAGE_FLAG_ACKNOWLEDGE | MESSAGE_FLAG_UNSEQUENCED,
 
-  CHANNEL_FLAG_MASK = (0xE0),
-  CHANNEL_FLAG_OFFSET = 5,
-  NB_PRIORITY = ((CHANNEL_FLAG_MASK >> CHANNEL_FLAG_OFFSET) + 1),
 };
 
 enum message_command {
@@ -118,19 +127,8 @@ enum message_command {
   SEND_UNRELIABLE_FRAGMENT = 0x0C,
 };
 
-// -- CLIENT
-struct client {
-  int peerId;
-  uint8_t metadata;
-};
-
-struct da_client {
-  struct client *items;
-  size_t count;
-  size_t capacity;
-};
-
 // -- Message parsé
+
 struct packet_header {
   uint16_t PeerID;
   uint16_t CommandCount;
@@ -149,7 +147,6 @@ struct message {
   };
   unsigned char isDisable;
   uint8_t flags;
-  unsigned char priorityFlag;
 
   struct packet_header packet_header;
   // --
@@ -184,6 +181,27 @@ struct cb_message {
   size_t capacity;
 };
 
+// -- CLIENT
+struct client {
+
+  struct cb_message recvMessageBuff;
+  struct cb_message sendMessageBuff;
+
+  struct sockaddr_in addr;
+  int peerId;
+};
+
+struct da_client {
+  struct client *items;
+  size_t count;
+  size_t capacity;
+};
+
+struct hm_client {
+  uint32_t key;
+  struct client value;
+};
+
 // -- Message brut
 struct message_ack_raw {
   uint16_t ReceivedSentTime;
@@ -205,7 +223,7 @@ struct __attribute__((packed)) message_fragment_raw {
 
 struct message_base_raw {
   uint8_t CommandFlags;
-  uint8_t ChannelIDFlags;
+  uint8_t ChannelID;
 
   // TODO : dispactch seq number dans les struct de part2 et créer un
   // struct 'message_send_unseq' ou il ne sera pas présent
@@ -229,6 +247,7 @@ struct packet_header_base_raw {
 };
 
 // -- poll
+
 struct da_pollfd {
   struct pollfd *items;
   size_t capacity;
@@ -239,25 +258,21 @@ struct da_pollfd {
 // Global variable
 // --------------------------------------------------
 
-extern struct cb_message G_recvMessageBuff[NB_PRIORITY];
-extern struct cb_message G_sendMessageBuff[NB_PRIORITY];
 // struct da_xxx waitingAck;
 
-extern struct da_client G_da_client;
+extern struct hm_client *G_hm_client;
 extern struct da_pollfd G_pollfds;
 
 // --------------------------------------------------
 // Function definition
 // --------------------------------------------------
 
-ssize_t index_of_client(int id);
 ssize_t index_of_poll(int fd);
 
-void initMessageBuffer();
-void freeMessageBuffer();
-
 void net_handle_io();
-int server_accept(struct pollfd s_pfd);
+// int server_accept(struct pollfd *s_pfd);
+
+void addClient(struct client *clt);
 
 int net_poll(struct message *msg_out);
 

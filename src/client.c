@@ -10,10 +10,8 @@
 
 #include "net.h"
 
-// struct cb_message G_recvMessageBuff[NB_PRIORITY];
-// struct cb_message G_sendMessageBuff[NB_PRIORITY];
 
-struct da_client G_da_client = {0};
+// struct da_client G_da_client = {0};
 struct da_pollfd G_pollfds = {0};
 
 int main(int argc, char **argv) {
@@ -61,7 +59,7 @@ int main(int argc, char **argv) {
       (struct message_base_raw *)(send_buff + buff_it);
 
   msg1->CommandFlags = SEND_RELIABLE | MESSAGE_FLAG_ACKNOWLEDGE;
-  msg1->ChannelIDFlags = 22;
+  msg1->ChannelID = 22;
   msg1->ReliableSeqNumber = htons(2200);
   buff_it += sizeof(*msg1);
 
