@@ -14,10 +14,6 @@
 // 8))
 
 // ASKIP au bout de 300 entré ca va faire pas mal de collision
-#define MIX32(x) ((x) ^ ((x) >> 16))
-#define ADDR_TO_KEY(addr)                                                                          \
-  ((uint16_t)MIX32((uint32_t)(addr).sin_addr.s_addr ^                                              \
-                   (((uint32_t)(addr).sin_port << 16) | (addr).sin_port)))
 
 #define SOCK_ERR (-1)
 #define POLLING_ERROR (-1)

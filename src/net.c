@@ -1,4 +1,3 @@
-#include <time.h>
 #include <assert.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -10,6 +9,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "net.h"
 
@@ -34,13 +35,21 @@ size_t getMessageSize(struct message *msg, size_t packet_header_size, size_t pay
 
 void handleSendBuff();
 
-
 static inline uint64_t now_ms(void);
 uint16_t get_timestamp16(void);
 
 // -----
-//
 
+
+uint16_t hash_client(uint32_t addr, uint16_t port) {
+  uint32_t x = addr ^ ((uint32_t)port << 16 | port);
+  x ^= x >> 16;
+  x *= 0x7feb352d;
+  x ^= x >> 15;
+  x *= 0x846ca68b;
+  x ^= x >> 16;
+  return (uint16_t)x;
+}
 
 static inline uint64_t now_ms(void) {
   struct timespec ts;
@@ -59,13 +68,17 @@ uint16_t get_timestamp16(void) {
   return (uint16_t)((t - start) / 10);
 }
 
-
-
 // @note buff_out will be garbage if the function retrun an error
 ssize_t readEntirePayload(int fd, struct sockaddr_in *addr,
                           uint8_t buff_out[static MAX_PKT_SIZE + 1]) {
 
+  socklen_t addr_len = sizeof(*addr);
+  // ssize_t recv_return_value = recvfrom(fd, buff_out, MAX_PKT_SIZE + 1, MSG_PEEK, (struct sockaddr
+  // *)addr, &addr_len);
   ssize_t recv_return_value = recv(fd, buff_out, MAX_PKT_SIZE + 1, MSG_PEEK);
+
+  // tcp dependant :
+  getpeername(fd, (struct sockaddr *)addr, &addr_len);
 
   // Check there is a problem
   if (recv_return_value == -1) {
@@ -73,10 +86,15 @@ ssize_t readEntirePayload(int fd, struct sockaddr_in *addr,
       perror("Error while recv-ing payload");
       return -1;
     }
-  } else if (recv_return_value > MAX_PKT_SIZE) {
-    // le while est TCP dependant
-    while (recv(fd, buff_out, MAX_PKT_SIZE, MSG_DONTWAIT) > 0)
-      ;
+  }
+
+  uint8_t consume_buff[MAX_PKT_SIZE];
+
+  // le while est TCP dependant
+  while (recvfrom(fd, consume_buff, MAX_PKT_SIZE + 1, MSG_DONTWAIT, NULL, NULL) > 0)
+    ;
+
+  if (recv_return_value > MAX_PKT_SIZE) {
     return -2;
   }
 
@@ -144,8 +162,12 @@ int readPacket(int fd) {
   // NOTE / TODO : tcp related
   else if (total_packet_size == 0) {
     printf("connexion close from client, fd : '%d'\n", fd);
+
     // deleting it from pollfds
     G_pollfds.items[index_of_poll(fd)].fd = -1;
+
+    // uint16_t key = ADDR_TO_KEY(addr);
+    stbds_hmdel(G_hm_client, hash_client(addr.sin_addr.s_addr, addr.sin_port));
     return 0;
   }
 
@@ -167,8 +189,7 @@ int readPacket(int fd) {
 
   // TODO - HERE : On devrait avoir le client pour pouvoir add dans sont rcvMessageBuffer
 
-  // uint32_t client_hmap_key = (addr.sin_addr.s_addr & 0x0000FFFF) | addr.sin_port;
-  uint16_t client_hmap_key = ADDR_TO_KEY(addr);
+  uint16_t client_hmap_key = hash_client(addr.sin_addr.s_addr, addr.sin_port);
 
   struct hm_client *hm_client_it = stbds_hmgetp_null(G_hm_client, client_hmap_key);
 
@@ -177,7 +198,7 @@ int readPacket(int fd) {
     addClient(&(struct client){.addr = addr, .peerId = fd});
   }
 
-  struct client *clt = &hm_client_it->value;
+  struct client *clt = &G_hm_client[stbds_hmgeti(G_hm_client, client_hmap_key)].value;
 
   size_t offset_message_payload = packet_header_size;
 
@@ -209,10 +230,10 @@ int readPacket(int fd) {
     cb_enqueue(clt->recvMessageBuff, msg);
   }
 
-
-  assert(offset_message_payload != total_packet_size && "didn't read the all the packet, OR read too much ?");
-  assert(command_it != packet_header.CommandCount && "didn't respcted the command count from the packet header");
-
+  assert(offset_message_payload == total_packet_size &&
+         "didn't read the all the packet, OR read too much ?");
+  assert(command_it == packet_header.CommandCount &&
+         "didn't respcted the command count from the packet header");
 
   free(recv_buff);
 
@@ -535,7 +556,10 @@ void handleSendBuff() {
       }
 
       // send le packet
-      printf("on send un paquet \n");
+      if (pkt_payload_actual_size > 0) {
+        printf("on send un paquet \n");
+      }
+
       free(packet_buffer);
 
       if (is_packet_full) {
@@ -543,6 +567,7 @@ void handleSendBuff() {
       } else {
         should_stop = 1;
       }
+
     }
   }
 }
@@ -613,9 +638,12 @@ ssize_t index_of_poll(int fd) {
 void addClient(struct client *clt) {
 
   cb_init(clt->recvMessageBuff, 100);
-  cb_init(clt->recvMessageBuff, 100);
+  cb_init(clt->sendMessageBuff, 100);
 
-  uint32_t client_hmap_key = ADDR_TO_KEY((clt->addr));
+  assert(clt->recvMessageBuff.items != NULL);
+  assert(clt->sendMessageBuff.items != NULL);
+
+  uint32_t client_hmap_key = hash_client(clt->addr.sin_addr.s_addr, clt->addr.sin_port);
 
   stbds_hmput(G_hm_client, client_hmap_key, (*clt));
 }

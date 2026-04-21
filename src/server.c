@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <sys/time.h>
+
 #include <poll.h>
 
 #include <netinet/in.h>
@@ -42,6 +44,7 @@ int main(int argc, char **argv) {
   }
 
   struct pollfd *server_pfd;
+  server_pfd = &G_pollfds.items[0];
 
   printf("listening on port '%d'\n", PORT);
 
@@ -52,7 +55,6 @@ int main(int argc, char **argv) {
     if (poll(G_pollfds.items, G_pollfds.count, -1) == -1) {
       perror("error while poll-ing");
     }
-    server_pfd = &G_pollfds.items[0];
 
     // -----------------------
     // Traitement message reçu
@@ -64,8 +66,6 @@ int main(int argc, char **argv) {
 
       printf("\nnew connection, fd : '%d'\n", client_fd);
 
-      addClient(&((struct client){.peerId = client_fd}));
-
       struct pollfd pfd = {.fd = client_fd, .events = POLLIN, .revents = POLLIN};
       da_append(G_pollfds, pfd);
 
@@ -75,6 +75,9 @@ int main(int argc, char **argv) {
       perror("error while accepting new client");
     }
 
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+
     net_handle_io();
 
     // ------------------------------
@@ -82,15 +85,20 @@ int main(int argc, char **argv) {
     // ------------------------------
 
     struct message msg;
-    while ((net_poll(&msg))) {
+    while ( net_poll(&msg) ) {
       printf("packet returned from net_poll()\n");
     }
+
+    gettimeofday(&end, NULL);
+    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1000000.0;
+    printf("Temps écoulé : %f secondes\n", elapsed);
+    // getc(stdin);
   }
+
 
   // TODO De-allocate client da
   return 0;
 }
-
 
 // --------------------
 
