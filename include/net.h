@@ -25,7 +25,7 @@
 // - header udp 8 octets
 #define MAX_PKT_SIZE (1400)
 
-#define MAX_PKT_HEADER_SIZE (16)
+#define MAX_PKT_HEADER_SIZE (6)
 #define MIN_PKT_HEADER_SIZE (4)
 
 #define MIN_MSG_HEADER_SIZE (6)
@@ -49,7 +49,6 @@
       else                                                                                         \
         da.capacity *= 2;                                                                          \
       da.items = realloc(da.items, da.capacity * sizeof(*da.items));                               \
-      assert(da.items != NULL);                                                                    \
     }                                                                                              \
     da.items[da.count++] = item;                                                                   \
   } while (0)
@@ -185,6 +184,7 @@ struct client {
 
   struct sockaddr_in addr;
   int peerId;
+  int fd;
 };
 
 struct da_client {
