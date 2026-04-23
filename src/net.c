@@ -22,6 +22,7 @@
 #include "net.h"
 
 struct NNet_hm_client *G_hm_client = {0};
+int G_serv_FD;
 
 int readPacket(int fd);
 
@@ -59,8 +60,8 @@ uint16_t getNewPeerId() {
 }
 
 static inline uint64_t hash_client(struct sockaddr_in sock_addr) {
-    uint64_t a = ((uint64_t)sock_addr.sin_addr.s_addr << 16) | (uint64_t)sock_addr.sin_port;
-    return a;
+    uint64_t h = ((uint64_t)sock_addr.sin_addr.s_addr << 16) | (uint64_t)sock_addr.sin_port;
+    return h;
 }
 
 static inline uint64_t now_ms(void) {
@@ -89,22 +90,11 @@ ssize_t readEntirePayload(int fd, struct sockaddr_in *addr,
 
     socklen_t addr_len = sizeof(*addr);
 
-    // ssize_t recv_return_value =
-    //     recvfrom(fd, buff_out, MAX_PKT_SIZE + 1, 0, (struct sockaddr *)addr, &addr_len);
-
-    ssize_t recv_return_value = recvfrom(fd, buff_out, MAX_PKT_SIZE + 1, 0, NULL, NULL);
-
-    // tcp dependant :
-    getpeername(fd, (struct sockaddr *)addr, &addr_len);
-    // ssize_t recv_return_value = recv(fd, buff_out, MAX_PKT_SIZE + 1, 0);
+    ssize_t recv_return_value =
+        recvfrom(G_serv_FD, buff_out, MAX_PKT_SIZE + 1, 0, (struct sockaddr *)addr, &addr_len);
 
     // Check there is a problem
     if (recv_return_value == -1) {
-
-        // TCP dependant, flush fd
-        while (recvfrom(fd, buff_out, MAX_PKT_SIZE, MSG_DONTWAIT, NULL, NULL) > 0)
-            ;
-
         perror("Error while recv-ing payload");
         return -1;
     }
@@ -177,22 +167,12 @@ int readPacket(int fd) {
     unsigned char *recv_buff = malloc(MAX_PKT_SIZE + 1);
     struct sockaddr_in addr;
 
-    ssize_t total_packet_size = readEntirePayload(fd, &addr, recv_buff);
+    ssize_t total_packet_size = readEntirePayload(G_serv_FD, &addr, recv_buff);
 
     if (total_packet_size < 0) {
         free(recv_buff);
         return -1;
-    }
-    // NOTE / TODO : tcp related
-    else if (total_packet_size == 0) {
-        printf("connexion close from client, fd : '%d'\n", fd);
-
-        // deleting it from pollfds
-        G_pollfds.items[index_of_poll(fd)].fd = -1;
-
-        // uint16_t key = ADDR_TO_KEY(addr);
-        stbds_hmdel(G_hm_client, hash_client(addr));
-
+    } else if (total_packet_size == 0) {
         free(recv_buff);
         return 0;
     }
@@ -273,7 +253,7 @@ int readPacket(int fd) {
     return 0;
 }
 
-void net_handle_io() {
+void NNet_HandleIO() {
 
     /* clang-format off */
     #ifndef NDEBUG
@@ -282,18 +262,7 @@ void net_handle_io() {
     #endif
     /* clang-format on */
 
-    for (size_t i = 0; i < G_pollfds.count; i++) {
-        if (G_pollfds.items[i].revents & POLLIN) {
-
-            /* clang-format off */
-            #ifndef NDEBUG
-                printf("\nnew message from '%d'\n", G_pollfds.items[i].fd);
-            #endif
-            /* clang-format on */
-
-            readPacket(G_pollfds.items[i].fd);
-        }
-    }
+    readPacket(G_serv_FD);
 
     /* clang-format off */
     #ifndef NDEBUG
@@ -550,7 +519,6 @@ size_t addMessageToPacketRaw(uint8_t *buff, struct NNet_message *msg) {
 
 void handleSendBuff() {
 
-    printf("%s()\n", __FUNCTION__);
     // atm on envois tout le temps le opt sentTime
     const size_t packet_header_size =
         sizeof(struct NNet_packet_header_base_raw) + sizeof(struct NNet_packet_header_opt_time_raw);
@@ -566,8 +534,6 @@ void handleSendBuff() {
         int should_continue = 1;
         uint16_t command_count = 0;
         clt = &G_hm_client[client_it].value;
-        printf("clt.fd %d\n", clt->fd);
-        printf("clt->sendMessageBuff.count %ld\n", clt->sendMessageBuff.count);
 
         while (should_continue) {
             command_count = 0;
@@ -578,7 +544,6 @@ void handleSendBuff() {
             int pkt_payload_actual_size = 0;
 
             while (clt->sendMessageBuff.count > 0) {
-                printf("\tsendMessageBuff.count > 0\n");
 
                 struct NNet_message msg_peek = {0};
                 cb_peek(clt->sendMessageBuff, msg_peek);
@@ -600,7 +565,7 @@ void handleSendBuff() {
                             // ajouter les fragment dans le sendBuffer OU les envoyer direct
                             // ?
 
-                            assert(1 && "not implemented the fragment send yet");
+                            assert(1 && "message too big, not implemented the fragment send yet");
                         }
                     }
                     should_continue = 1;
@@ -614,12 +579,10 @@ void handleSendBuff() {
                     addMessageToPacketRaw(packet_payload + pkt_payload_actual_size, &msg);
                 pkt_payload_actual_size += msg_raw_wrote;
                 command_count++;
-                printf("\tcommand_count++\n");
             }
 
             if (command_count > 0) {
 
-                printf("\tsend a packeet\n");
 
                 // Creation du packet header
                 alignas(struct NNet_packet_header_base_raw) uint8_t b[MAX_PKT_HEADER_SIZE];
@@ -636,7 +599,9 @@ void handleSendBuff() {
 
                 // envois
                 size_t total_pkt_size = packet_header_size + pkt_payload_actual_size;
-                send(clt->fd, begin_pkt_header, total_pkt_size, 0);
+
+                sendto(G_serv_FD, begin_pkt_header, total_pkt_size, 0, (struct sockaddr*)&clt->addr,
+                       sizeof(clt->addr));
             }
 
             free(packet_buffer);
@@ -644,7 +609,7 @@ void handleSendBuff() {
     }
 }
 
-int net_poll(struct NNet_message *msg_out) {
+int NNet_Poll(struct NNet_message *msg_out, struct NNet_context *ctx) {
     struct NNet_client *clt;
     for (size_t client_it = 0; client_it < stbds_hmlen(G_hm_client); client_it++) {
 
@@ -661,18 +626,27 @@ int net_poll(struct NNet_message *msg_out) {
                     .ReceivedSeqNumber = msg_out->seq_number,
                     .ReceivedSentTime = msg_out->packet_header.SentTime,
                 };
-                printf("on enqueu du ack ici ------\n");
-                printf("clt fd : %d\n", clt->fd);
-                printf("clt->sendMessageBuff.count %ld\n", clt->sendMessageBuff.count);
                 cb_enqueue(clt->sendMessageBuff, msg2send);
-                printf("clt->sendMessageBuff.count %ld\n", clt->sendMessageBuff.count);
             }
 
             switch (msg_out->Command) {
-            case CONNECT:
             case THROTTLE_CONFIGURE:
             case BANDWIDTH_LIMIT:
+                assert(0 && "THROTTLE_CONFIGURE & BANDWIDTH_LIMIT not implemented");
+
+                break;
+            case CONNECT:
+                if (!ctx->isServer) {
+                    break;
+                }
+                assert(0 && "TODO : implement CONNECT here");
+
             case VERIFY_CONNECT:
+                if (ctx->isServer) {
+                    break;
+                }
+                assert(0 && "TODO : implement VERIFY_CONNECT here");
+
                 break;
 
             case SEND_FRAGMENT:
@@ -695,17 +669,6 @@ int net_poll(struct NNet_message *msg_out) {
     return 0;
 }
 
-ssize_t index_of_poll(int fd) {
-
-    for (size_t i = 0; i < G_pollfds.count; i++) {
-        if (G_pollfds.items[i].fd == fd) {
-            return i;
-        }
-    }
-
-    return -1;
-}
-
 // Copie client data in the global array of client
 void addClient(struct NNet_client *clt) {
 
@@ -718,4 +681,27 @@ void addClient(struct NNet_client *clt) {
     uint64_t client_hmap_key = hash_client(clt->addr);
 
     stbds_hmput(G_hm_client, client_hmap_key, (*clt));
+}
+
+int NNet_ServerCheckRecv() {
+
+    assert(G_serv_FD >= 0);
+
+    // udp :
+    ssize_t n = recvfrom(G_serv_FD, (&(uint8_t){1}), 1, MSG_DONTWAIT | MSG_PEEK, NULL, NULL);
+
+    // TODO mettre en bloquant nan ?
+    aze;
+
+    // int client_fd = accept(s_pfd->fd, NULL, NULL);
+
+    if (n == SOCK_ERR) {
+        if (n == EWOULDBLOCK || n == EAGAIN) {
+            return 0;
+        }
+
+        return -2;
+    }
+
+    return n;
 }

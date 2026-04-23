@@ -95,6 +95,14 @@
 
 // -- enum
 
+
+// NOTE : pourrait etre un uint64 avec des flag nan ?
+struct NNet_context {
+    int fd;
+    int isServer;
+    int isBloquant;
+};
+
 enum NNet_flag {
   PACKET_FLAG_COMPRESSED = (1 << 14), // si commpressé
   PACKET_FLAG_SENT_TIME = (1 << 15),  // Si on envoit le timestamp
@@ -251,7 +259,6 @@ struct NNet_da_pollfd {
 // struct da_xxx waitingAck;
 
 extern struct NNet_hm_client *G_hm_client;
-extern struct NNet_da_pollfd G_pollfds;
 
 // --------------------------------------------------
 // Function definition
@@ -259,11 +266,13 @@ extern struct NNet_da_pollfd G_pollfds;
 
 ssize_t index_of_poll(int fd);
 
-void net_handle_io();
+void NNet_HandleIO();
 // int server_accept(struct pollfd *s_pfd);
+
+int NNet_ServerCheckRecv();
 
 void addClient(struct NNet_client *clt);
 
-int net_poll(struct NNet_message *msg_out);
+int NNet_Poll(struct NNet_message *msg_out);
 
 #endif // __net_H__
