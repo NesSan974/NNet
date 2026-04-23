@@ -174,7 +174,7 @@ size_t parseMessageRaw(unsigned char *buff, size_t buff_size, struct NNet_messag
 // @return false (0) if no update
 int readPacket(int fd) {
 
-    unsigned char *recv_buff = malloc(MAX_PKT_SIZE + 2);
+    unsigned char *recv_buff = malloc(MAX_PKT_SIZE + 1);
     struct sockaddr_in addr;
 
     ssize_t total_packet_size = readEntirePayload(fd, &addr, recv_buff);
@@ -270,14 +270,17 @@ int readPacket(int fd) {
            "didn't respected the command count from the packet header");
 
     free(recv_buff);
-
     return 0;
 }
 
 void net_handle_io() {
 
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
+    /* clang-format off */
+    #ifndef NDEBUG
+        struct timeval start, end;
+        gettimeofday(&start, NULL);
+    #endif
+    /* clang-format on */
 
     for (size_t i = 0; i < G_pollfds.count; i++) {
         if (G_pollfds.items[i].revents & POLLIN) {
@@ -292,9 +295,13 @@ void net_handle_io() {
         }
     }
 
-    gettimeofday(&end, NULL);
-    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1000000.0;
-    printf("Temps écoulé : %f secondes\n", elapsed);
+    /* clang-format off */
+    #ifndef NDEBUG
+        gettimeofday(&end, NULL);
+        double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1000000.0;
+        printf("Temps écoulé : %f secondes\n", elapsed);
+    #endif
+    /* clang-format on */
 }
 
 size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,

@@ -107,7 +107,7 @@ int setDefaultServerSocket() {
 
     const struct sockaddr_in addr = {
         .sin_family = AF_INET,         /* Famille d'adresses : AF_INET */
-        .sin_port = htons(2202),       /* Port dans l'ordre des octets réseau */
+        .sin_port = htons(PORT),       /* Port dans l'ordre des octets réseau */
         .sin_addr.s_addr = INADDR_ANY, /* Adresse Internet */
     };
 

@@ -183,7 +183,7 @@ struct NNet_client {
   struct NNet_cb_message sendMessageBuff;
 
   struct sockaddr_in addr;
-  int peerId;
+  uint16_t peerId;
   int fd;
 };
 
