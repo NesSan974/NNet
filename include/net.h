@@ -187,12 +187,6 @@ struct NNet_client {
   int fd;
 };
 
-struct NNet_da_client {
-  struct NNet_client *items;
-  size_t count;
-  size_t capacity;
-};
-
 struct NNet_hm_client {
   uint64_t key;
   struct NNet_client value;

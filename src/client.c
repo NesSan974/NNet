@@ -1,5 +1,6 @@
 
 #include <netinet/in.h>
+#include <stdalign.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,13 +32,13 @@ int main(int argc, char **argv) {
   int msg1_payload_size = strlen(msg1_payload);
 
   const int total_packet_size =
-      sizeof(struct packet_header_base_raw) + sizeof(struct packet_header_opt_time_raw) +
-      sizeof(struct message_base_raw) + sizeof(struct message_send_raw) + msg1_payload_size;
+      sizeof(struct NNet_packet_header_base_raw) + sizeof(struct NNet_packet_header_opt_time_raw) +
+      sizeof(struct NNet_message_base_raw) + sizeof(struct NNet_message_send_raw) + msg1_payload_size;
 
   uint8_t *send_buff = malloc(total_packet_size);
   size_t buff_it = 0;
 
-  struct packet_header_base_raw *ph = (struct packet_header_base_raw *)send_buff;
+  struct NNet_packet_header_base_raw *ph = (struct NNet_packet_header_base_raw *)send_buff;
 
   ph->PeerIDFlags = htons(1);
   ph->PeerIDFlags |= PACKET_FLAG_SENT_TIME;
@@ -50,14 +51,14 @@ int main(int argc, char **argv) {
   // Message 1
   // -- command & flags
 
-  struct message_base_raw *msg1 = (struct message_base_raw *)(send_buff + buff_it);
+  struct NNet_message_base_raw *msg1 = (struct NNet_message_base_raw *)(send_buff + buff_it);
 
   msg1->CommandFlags = SEND_RELIABLE | MESSAGE_FLAG_ACKNOWLEDGE;
   msg1->ChannelID = 22;
   msg1->ReliableSeqNumber = htons(2200);
   buff_it += sizeof(*msg1);
 
-  struct message_send_raw *msg1_part2 = (struct message_send_raw *)(msg1->message_part2);
+  struct NNet_message_send_raw *msg1_part2 = (struct NNet_message_send_raw *)(msg1->message_part2);
   msg1_part2->DataLength = htonl(msg1_payload_size);
   memcpy(msg1_part2->payload, msg1_payload, msg1_payload_size);
 
@@ -71,7 +72,7 @@ int main(int argc, char **argv) {
     da_append(fds, f);
   }
 
-  uint8_t recvbuff[MAX_PKT_SIZE];
+  alignas(struct NNet_packet_header_base_raw) uint8_t recvbuff[MAX_PKT_SIZE];
   for (size_t i = 0; i < nb; i++) {
 
     if (connect(fds.items[i], (const struct sockaddr *)&addr, sizeof(addr)) == -1) {
@@ -83,9 +84,13 @@ int main(int argc, char **argv) {
 
     n = recv(fds.items[i], recvbuff, MAX_PKT_SIZE, 0);
     if (n > 0) {
+
+        struct NNet_packet_header_base_raw *ph = (struct NNet_packet_header_base_raw *)recvbuff;
+
       printf("recv: \n\tpeerID: %d\n\tflag: %d\n\tcommandCount: %d\n",
-             ntohs( (uint16_t)*recvbuff & (~PACKET_FLAG_MASK) ),
-             ((uint16_t)*recvbuff) & (PACKET_FLAG_MASK), ntohs((uint16_t)*(recvbuff + 2)));
+             ntohs( ph->PeerIDFlags & (~PACKET_FLAG_MASK) ),
+             ph->PeerIDFlags & (PACKET_FLAG_MASK),
+             ntohs(ph->CommandCount));
     }
   }
 

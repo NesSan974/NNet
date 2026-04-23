@@ -59,7 +59,8 @@ uint16_t getNewPeerId() {
 }
 
 static inline uint64_t hash_client(struct sockaddr_in sock_addr) {
-    return ((uint64_t)sock_addr.sin_addr.s_addr << 16) | (uint64_t)sock_addr.sin_port;
+    uint64_t a = ((uint64_t)sock_addr.sin_addr.s_addr << 16) | (uint64_t)sock_addr.sin_port;
+    return a;
 }
 
 static inline uint64_t now_ms(void) {
@@ -87,27 +88,26 @@ ssize_t readEntirePayload(int fd, struct sockaddr_in *addr,
     /* clang-format on */
 
     socklen_t addr_len = sizeof(*addr);
-    // ssize_t recv_return_value = recvfrom(fd, buff_out, MAX_PKT_SIZE + 1, MSG_PEEK, (struct
-    // sockaddr
-    // *)addr, &addr_len);
-    ssize_t recv_return_value = recv(fd, buff_out, MAX_PKT_SIZE + 1, MSG_PEEK);
+
+    // ssize_t recv_return_value =
+    //     recvfrom(fd, buff_out, MAX_PKT_SIZE + 1, 0, (struct sockaddr *)addr, &addr_len);
+
+    ssize_t recv_return_value = recvfrom(fd, buff_out, MAX_PKT_SIZE + 1, 0, NULL, NULL);
 
     // tcp dependant :
     getpeername(fd, (struct sockaddr *)addr, &addr_len);
+    // ssize_t recv_return_value = recv(fd, buff_out, MAX_PKT_SIZE + 1, 0);
 
     // Check there is a problem
     if (recv_return_value == -1) {
-        if (errno != EWOULDBLOCK && errno != EAGAIN) {
-            perror("Error while recv-ing payload");
-            return -1;
-        }
+
+        // TCP dependant, flush fd
+        while (recvfrom(fd, buff_out, MAX_PKT_SIZE, MSG_DONTWAIT, NULL, NULL) > 0)
+            ;
+
+        perror("Error while recv-ing payload");
+        return -1;
     }
-
-    uint8_t consume_buff[MAX_PKT_SIZE];
-
-    // le while est TCP dependant
-    while (recvfrom(fd, consume_buff, MAX_PKT_SIZE + 1, MSG_DONTWAIT, NULL, NULL) > 0)
-        ;
 
     if (recv_return_value > MAX_PKT_SIZE) {
         return -2;
@@ -217,14 +217,14 @@ int readPacket(int fd) {
         return 0;
     }
 
-    uint16_t client_hmap_key = hash_client(addr);
+    uint64_t client_hmap_key = hash_client(addr);
     struct NNet_hm_client *hm_client_it = stbds_hmgetp_null(G_hm_client, client_hmap_key);
 
     if (hm_client_it == NULL) {
 
         /* clang-format off */
         #ifndef NDEBUG
-            printf("nouveau client ! key : %d\n", client_hmap_key);
+            printf("nouveau client ! key : %ld\n", client_hmap_key);
         #endif
         /* clang-format on */
 
@@ -316,6 +316,7 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
     // -- command & flags
     msg_out->flags = (read_msg->CommandFlags & MESSAGE_FLAG_MASK);
     msg_out->Command = (read_msg->CommandFlags & (uint16_t)(~MESSAGE_FLAG_MASK));
+
     msg_out->ChannelID = read_msg->ChannelID;
 
     actual_header_size += sizeof(*read_msg);
@@ -549,6 +550,7 @@ size_t addMessageToPacketRaw(uint8_t *buff, struct NNet_message *msg) {
 
 void handleSendBuff() {
 
+    printf("%s()\n", __FUNCTION__);
     // atm on envois tout le temps le opt sentTime
     const size_t packet_header_size =
         sizeof(struct NNet_packet_header_base_raw) + sizeof(struct NNet_packet_header_opt_time_raw);
@@ -558,12 +560,14 @@ void handleSendBuff() {
            et construire le packet header juste avant l'envois
     */
     struct NNet_client *clt = {0};
-    int should_continue;
-    int command_count;
 
     for (size_t client_it = 0; client_it < stbds_hmlen(G_hm_client); client_it++) {
 
+        int should_continue = 1;
+        uint16_t command_count = 0;
         clt = &G_hm_client[client_it].value;
+        printf("clt.fd %d\n", clt->fd);
+        printf("clt->sendMessageBuff.count %ld\n", clt->sendMessageBuff.count);
 
         while (should_continue) {
             command_count = 0;
@@ -574,6 +578,8 @@ void handleSendBuff() {
             int pkt_payload_actual_size = 0;
 
             while (clt->sendMessageBuff.count > 0) {
+                printf("\tsendMessageBuff.count > 0\n");
+
                 struct NNet_message msg_peek = {0};
                 cb_peek(clt->sendMessageBuff, msg_peek);
 
@@ -608,15 +614,18 @@ void handleSendBuff() {
                     addMessageToPacketRaw(packet_payload + pkt_payload_actual_size, &msg);
                 pkt_payload_actual_size += msg_raw_wrote;
                 command_count++;
+                printf("\tcommand_count++\n");
             }
 
             if (command_count > 0) {
+
+                printf("\tsend a packeet\n");
 
                 // Creation du packet header
                 alignas(struct NNet_packet_header_base_raw) uint8_t b[MAX_PKT_HEADER_SIZE];
 
                 struct NNet_packet_header_base_raw *phraw = (struct NNet_packet_header_base_raw *)b;
-                phraw->CommandCount = command_count;
+                phraw->CommandCount = htons(command_count);
                 phraw->PeerIDFlags = htons(clt->peerId) | PACKET_FLAG_SENT_TIME;
                 phraw->opt_timeSpent->time = get_timestamp16();
 
@@ -652,7 +661,11 @@ int net_poll(struct NNet_message *msg_out) {
                     .ReceivedSeqNumber = msg_out->seq_number,
                     .ReceivedSentTime = msg_out->packet_header.SentTime,
                 };
+                printf("on enqueu du ack ici ------\n");
+                printf("clt fd : %d\n", clt->fd);
+                printf("clt->sendMessageBuff.count %ld\n", clt->sendMessageBuff.count);
                 cb_enqueue(clt->sendMessageBuff, msg2send);
+                printf("clt->sendMessageBuff.count %ld\n", clt->sendMessageBuff.count);
             }
 
             switch (msg_out->Command) {
@@ -702,7 +715,7 @@ void addClient(struct NNet_client *clt) {
     assert(clt->recvMessageBuff.items != NULL);
     assert(clt->sendMessageBuff.items != NULL);
 
-    uint32_t client_hmap_key = hash_client(clt->addr);
+    uint64_t client_hmap_key = hash_client(clt->addr);
 
     stbds_hmput(G_hm_client, client_hmap_key, (*clt));
 }
