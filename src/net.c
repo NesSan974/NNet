@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <stdalign.h>
@@ -13,27 +12,29 @@
 #include <time.h>
 #include <unistd.h>
 
+// #define NDEBUG
+#include <assert.h>
+
 #define STB_DS_IMPLEMENTATION
 #define STBDS_NO_SHORT_NAMES
 #include "stb_ds.h"
 
 #include "net.h"
 
-// #define NDEBUG
-struct hm_client *G_hm_client = {0};
+struct NNet_hm_client *G_hm_client = {0};
 
 int readPacket(int fd);
 
-ssize_t readPacketHeader(int fd, struct packet_header *ph_out);
-size_t parsePacketHeader(unsigned char *buff, struct packet_header *ph_out);
+ssize_t readPacketHeader(int fd, struct NNet_packet_header *ph_out);
+size_t parsePacketHeader(unsigned char *buff, struct NNet_packet_header *ph_out);
 
-size_t parseMessageRaw(unsigned char *buff, size_t buff_size, struct message *msg_out);
-size_t parseMessageHeaderRaw(unsigned char *buff, size_t buff_size, struct message *msg_out);
+size_t parseMessageRaw(unsigned char *buff, size_t buff_size, struct NNet_message *msg_out);
+size_t parseMessageHeaderRaw(unsigned char *buff, size_t buff_size, struct NNet_message *msg_out);
 
 ssize_t readEntirePayload(int fd, struct sockaddr_in *addr,
                           uint8_t buff_out[static MAX_PKT_SIZE + 1]);
 
-size_t getMessageSize(struct message *msg, size_t payload_actual_size);
+size_t getMessageSize(struct NNet_message *msg, size_t payload_actual_size);
 
 void handleSendBuff();
 
@@ -117,7 +118,7 @@ ssize_t readEntirePayload(int fd, struct sockaddr_in *addr,
     return recv_return_value;
 }
 
-size_t parseMessageRaw(unsigned char *buff, size_t buff_size, struct message *msg_out) {
+size_t parseMessageRaw(unsigned char *buff, size_t buff_size, struct NNet_message *msg_out) {
 
     size_t header_size = parseMessageHeaderRaw(buff, buff_size, msg_out);
 
@@ -197,14 +198,13 @@ int readPacket(int fd) {
     }
 
     // Parsing the packet header
-    struct packet_header packet_header;
+    struct NNet_packet_header packet_header;
     size_t packet_header_size = parsePacketHeader(recv_buff, &packet_header);
     assert(packet_header_size <= MAX_PKT_SIZE);
 
-    // Printing stuff
-
     /* clang-format off */
     #ifndef NDEBUG
+        // Printing stuff
         printf("pkt_header_size %ld :\t", packet_header_size);
         printf("cmd_cnt = %d, flags = %d, peer_id = %d \n", packet_header.CommandCount,
             packet_header.flags, packet_header.PeerID);
@@ -218,7 +218,7 @@ int readPacket(int fd) {
     }
 
     uint16_t client_hmap_key = hash_client(addr.sin_addr.s_addr, addr.sin_port);
-    struct hm_client *hm_client_it = stbds_hmgetp_null(G_hm_client, client_hmap_key);
+    struct NNet_hm_client *hm_client_it = stbds_hmgetp_null(G_hm_client, client_hmap_key);
 
     if (hm_client_it == NULL) {
 
@@ -228,10 +228,12 @@ int readPacket(int fd) {
         #endif
         /* clang-format on */
 
-        addClient(&(struct client){.addr = addr, .peerId = client_hmap_key, .fd = fd});
+        addClient(&(struct NNet_client){.addr = addr, .peerId = client_hmap_key, .fd = fd});
     }
 
-    struct client *clt = &G_hm_client[stbds_hmgeti(G_hm_client, client_hmap_key)].value;
+    struct NNet_client *clt = &G_hm_client[stbds_hmgeti(G_hm_client, client_hmap_key)].value;
+
+    assert(clt != NULL);
 
     size_t offset_message_payload = packet_header_size;
     size_t command_it = 0;
@@ -247,7 +249,7 @@ int readPacket(int fd) {
             return -2;
         }
 
-        struct message msg = {0};
+        struct NNet_message msg = {0};
         size_t parse_size = parseMessageRaw(recv_buff + offset_message_payload,
                                             total_packet_size - offset_message_payload, &msg);
 
@@ -296,12 +298,12 @@ void net_handle_io() {
 }
 
 size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
-                             struct message *msg_out) {
+                             struct NNet_message *msg_out) {
 
     size_t actual_header_size = 0;
 
-    alignas(struct message_base_raw) uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
-    struct message_base_raw *read_msg = (struct message_base_raw *)internal_buff;
+    alignas(struct NNet_message_base_raw) uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
+    struct NNet_message_base_raw *read_msg = (struct NNet_message_base_raw *)internal_buff;
     memcpy(read_msg, message_buff, sizeof(*read_msg));
 
     // -- command & flags
@@ -325,7 +327,7 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
 
     case ACKNOWLEDGE: {
 
-        struct message_ack_raw *read_msg_ack;
+        struct NNet_message_ack_raw *read_msg_ack;
 
         if (buff_size < actual_header_size + sizeof(*read_msg_ack)) {
             actual_header_size = 0;
@@ -334,7 +336,7 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
 
         memcpy(read_msg->message_part2, message_buff + actual_header_size, sizeof(*read_msg_ack));
 
-        read_msg_ack = (struct message_ack_raw *)(read_msg->message_part2);
+        read_msg_ack = (struct NNet_message_ack_raw *)(read_msg->message_part2);
         actual_header_size += sizeof(*read_msg_ack);
 
         msg_out->ReceivedSentTime = ntohs(read_msg_ack->ReceivedSentTime);
@@ -350,7 +352,7 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
     case SEND_UNRELIABLE:
     case SEND_UNSEQUENCED: {
 
-        struct message_send_raw *read_msg_send;
+        struct NNet_message_send_raw *read_msg_send;
 
         if (buff_size < actual_header_size + sizeof(*read_msg_send)) {
             actual_header_size = 0;
@@ -359,7 +361,7 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
 
         memcpy(read_msg->message_part2, message_buff + actual_header_size, sizeof(*read_msg_send));
 
-        read_msg_send = (struct message_send_raw *)(read_msg->message_part2);
+        read_msg_send = (struct NNet_message_send_raw *)(read_msg->message_part2);
         actual_header_size += sizeof(*read_msg_send);
 
         msg_out->DataLength = ntohl(read_msg_send->DataLength);
@@ -368,15 +370,15 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
     case SEND_UNRELIABLE_FRAGMENT:
     case SEND_FRAGMENT: {
 
-        struct message_fragment_raw *read_msg_frgm;
-        if (buff_size < actual_header_size + sizeof(struct message_fragment_raw)) {
+        struct NNet_message_fragment_raw *read_msg_frgm;
+        if (buff_size < actual_header_size + sizeof(struct NNet_message_fragment_raw)) {
             actual_header_size = 0;
             break;
         }
 
         memcpy(read_msg->message_part2, message_buff + actual_header_size, sizeof(*read_msg_frgm));
 
-        read_msg_frgm = (struct message_fragment_raw *)(read_msg->message_part2);
+        read_msg_frgm = (struct NNet_message_fragment_raw *)(read_msg->message_part2);
         actual_header_size += sizeof(*read_msg_frgm);
 
         msg_out->StartSeq = ntohs(read_msg_frgm->StartSeq);
@@ -399,14 +401,14 @@ size_t parseMessageHeaderRaw(unsigned char *message_buff, size_t buff_size,
     return actual_header_size;
 }
 
-size_t parsePacketHeader(unsigned char *packet_buff, struct packet_header *ph_out) {
+size_t parsePacketHeader(unsigned char *packet_buff, struct NNet_packet_header *ph_out) {
 
     size_t offset_readed = 0;
 
     // On memcpy vers un endroit ou on est sûr de l'alignement mémoire
-    alignas(struct packet_header_base_raw) uint8_t internal_buff[MAX_PKT_HEADER_SIZE];
-    struct packet_header_base_raw *packet_header_raw =
-        (struct packet_header_base_raw *)internal_buff;
+    alignas(struct NNet_packet_header_base_raw) uint8_t internal_buff[MAX_PKT_HEADER_SIZE];
+    struct NNet_packet_header_base_raw *packet_header_raw =
+        (struct NNet_packet_header_base_raw *)internal_buff;
     memcpy(packet_header_raw, packet_buff, sizeof(*packet_header_raw));
 
     ph_out->flags = (packet_header_raw->PeerIDFlags & PACKET_FLAG_MASK);
@@ -427,12 +429,12 @@ size_t parsePacketHeader(unsigned char *packet_buff, struct packet_header *ph_ou
     return offset_readed;
 }
 
-size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
-    size_t msg_size = sizeof(struct message_base_raw);
+size_t getMessageSize(struct NNet_message *msg, size_t payload_actual_size) {
+    size_t msg_size = sizeof(struct NNet_message_base_raw);
 
     switch (msg->Command) {
     case ACKNOWLEDGE:
-        msg_size += sizeof(struct message_ack_raw);
+        msg_size += sizeof(struct NNet_message_ack_raw);
         break;
 
     case CONNECT:
@@ -446,14 +448,14 @@ size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
     case SEND_RELIABLE:
     case SEND_UNRELIABLE:
     case SEND_UNSEQUENCED:
-        msg_size += sizeof(struct message_send_raw) + msg->DataLength;
+        msg_size += sizeof(struct NNet_message_send_raw) + msg->DataLength;
         break;
 
     case SEND_FRAGMENT:
     case SEND_UNRELIABLE_FRAGMENT: {
 
         const size_t header_fragment =
-            sizeof(struct message_base_raw) + sizeof(struct message_fragment_raw);
+            sizeof(struct NNet_message_base_raw) + sizeof(struct NNet_message_fragment_raw);
 
         msg_size += MAX_PKT_SIZE - MAX_PKT_HEADER_SIZE - payload_actual_size - header_fragment;
 
@@ -473,13 +475,13 @@ size_t getMessageSize(struct message *msg, size_t payload_actual_size) {
     return msg_size;
 }
 
-size_t addMessageToPacketRaw(uint8_t *buff, struct message *msg) {
+size_t addMessageToPacketRaw(uint8_t *buff, struct NNet_message *msg) {
 
     size_t header_size = 0;
 
-    alignas(struct message_base_raw) uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
+    alignas(struct NNet_message_base_raw) uint8_t internal_buff[MAX_MSG_HEADER_SIZE];
 
-    struct message_base_raw *msg_raw = (struct message_base_raw *)internal_buff;
+    struct NNet_message_base_raw *msg_raw = (struct NNet_message_base_raw *)internal_buff;
     header_size += sizeof(*msg_raw);
 
     msg_raw->CommandFlags = msg->Command | msg->flags;
@@ -490,7 +492,7 @@ size_t addMessageToPacketRaw(uint8_t *buff, struct message *msg) {
     switch (msg->Command) {
 
     case ACKNOWLEDGE: {
-        struct message_ack_raw *msg_ack = (struct message_ack_raw *)msg_raw + header_size;
+        struct NNet_message_ack_raw *msg_ack = (struct NNet_message_ack_raw *)msg_raw + header_size;
         header_size += sizeof(*msg_ack);
         msg_ack->ReceivedSentTime = htons(msg->ReceivedSentTime);
         memcpy(buff, msg_raw, header_size);
@@ -508,7 +510,8 @@ size_t addMessageToPacketRaw(uint8_t *buff, struct message *msg) {
     case SEND_RELIABLE:
     case SEND_UNRELIABLE:
     case SEND_UNSEQUENCED: {
-        struct message_send_raw *msg_send = (struct message_send_raw *)msg_raw + header_size;
+        struct NNet_message_send_raw *msg_send =
+            (struct NNet_message_send_raw *)msg_raw + header_size;
         header_size += sizeof(*msg_send);
         msg_send->DataLength = htons(msg->ReceivedSentTime);
 
@@ -541,13 +544,13 @@ void handleSendBuff() {
 
     // atm on envois tout le temps le opt sentTime
     const size_t packet_header_size =
-        sizeof(struct packet_header_base_raw) + sizeof(struct packet_header_opt_time_raw);
+        sizeof(struct NNet_packet_header_base_raw) + sizeof(struct NNet_packet_header_opt_time_raw);
     /*
            pour gerer le sentTime
            faire un offset d'au moins MAX_HEADER_SIZE
            et construire le packet header juste avant l'envois
     */
-    struct client *clt = {0};
+    struct NNet_client *clt = {0};
     int should_continue;
     int command_count;
 
@@ -564,7 +567,7 @@ void handleSendBuff() {
             int pkt_payload_actual_size = 0;
 
             while (clt->sendMessageBuff.count > 0) {
-                struct message msg_peek = {0};
+                struct NNet_message msg_peek = {0};
                 cb_peek(clt->sendMessageBuff, msg_peek);
 
                 size_t msg_size = getMessageSize(&msg_peek, pkt_payload_actual_size);
@@ -574,8 +577,8 @@ void handleSendBuff() {
                     if (msg_peek.Command == SEND_RELIABLE || msg_peek.Command == SEND_UNSEQUENCED ||
                         msg_peek.Command == SEND_UNRELIABLE) {
 
-                        const size_t send_msg_header_size =
-                            sizeof(struct message_base_raw) + sizeof(struct message_send_raw);
+                        const size_t send_msg_header_size = sizeof(struct NNet_message_base_raw) +
+                                                            sizeof(struct NNet_message_send_raw);
 
                         if (msg_size > MAX_PKT_SIZE - MAX_PKT_HEADER_SIZE - send_msg_header_size) {
                             // créer les fragments
@@ -591,7 +594,7 @@ void handleSendBuff() {
                     break;
                 }
 
-                struct message msg;
+                struct NNet_message msg;
                 cb_dequeue(clt->sendMessageBuff, msg);
 
                 size_t msg_raw_wrote =
@@ -603,9 +606,9 @@ void handleSendBuff() {
             if (command_count > 0) {
 
                 // Creation du packet header
-                alignas(struct packet_header_base_raw) uint8_t b[MAX_PKT_HEADER_SIZE];
+                alignas(struct NNet_packet_header_base_raw) uint8_t b[MAX_PKT_HEADER_SIZE];
 
-                struct packet_header_base_raw *phraw = (struct packet_header_base_raw *)b;
+                struct NNet_packet_header_base_raw *phraw = (struct NNet_packet_header_base_raw *)b;
                 phraw->CommandCount = command_count;
                 phraw->PeerIDFlags = htons(clt->peerId) | PACKET_FLAG_SENT_TIME;
                 phraw->opt_timeSpent->time = get_timestamp16();
@@ -625,8 +628,8 @@ void handleSendBuff() {
     }
 }
 
-int net_poll(struct message *msg_out) {
-    struct client *clt;
+int net_poll(struct NNet_message *msg_out) {
+    struct NNet_client *clt;
     for (size_t client_it = 0; client_it < stbds_hmlen(G_hm_client); client_it++) {
 
         clt = &G_hm_client[client_it].value;
@@ -636,7 +639,7 @@ int net_poll(struct message *msg_out) {
             cb_dequeue(clt->recvMessageBuff, (*msg_out));
 
             if (msg_out->flags & MESSAGE_FLAG_ACKNOWLEDGE) {
-                struct message msg2send = {
+                struct NNet_message msg2send = {
                     .Command = msg_out->Command,
                     .ChannelID = msg_out->ChannelID,
                     .ReceivedSeqNumber = msg_out->seq_number,
@@ -684,7 +687,7 @@ ssize_t index_of_poll(int fd) {
 }
 
 // Copie client data in the global array of client
-void addClient(struct client *clt) {
+void addClient(struct NNet_client *clt) {
 
     cb_init(clt->recvMessageBuff, 100);
     cb_init(clt->sendMessageBuff, 100);

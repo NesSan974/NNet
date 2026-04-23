@@ -95,7 +95,7 @@
 
 // -- enum
 
-enum flag {
+enum NNet_flag {
   PACKET_FLAG_COMPRESSED = (1 << 14), // si commpressé
   PACKET_FLAG_SENT_TIME = (1 << 15),  // Si on envoit le timestamp
   PACKET_FLAG_OFFSET = (8),
@@ -107,7 +107,7 @@ enum flag {
 
 };
 
-enum message_command {
+enum NNet_message_command {
   ACKNOWLEDGE = 0x01,
   CONNECT = 0x02,
   VERIFY_CONNECT = 0x03,
@@ -124,14 +124,14 @@ enum message_command {
 
 // -- Message parsé
 
-struct packet_header {
+struct NNet_packet_header {
   uint16_t PeerID;
   uint16_t CommandCount;
   uint16_t SentTime;
   uint16_t flags;
 };
 
-struct message {
+struct NNet_message {
   uint8_t Command;
   uint8_t ChannelID;
   union {
@@ -143,7 +143,7 @@ struct message {
   unsigned char isDisable;
   uint8_t flags;
 
-  struct packet_header packet_header;
+  struct NNet_packet_header packet_header;
   // --
 
   uint8_t *payload;
@@ -167,8 +167,8 @@ struct message {
   // padding + 6 mais osef
 };
 
-struct cb_message {
-  struct message *items;
+struct NNet_cb_message {
+  struct NNet_message *items;
 
   size_t head;
   size_t tail;
@@ -177,38 +177,38 @@ struct cb_message {
 };
 
 // -- CLIENT
-struct client {
+struct NNet_client {
 
-  struct cb_message recvMessageBuff;
-  struct cb_message sendMessageBuff;
+  struct NNet_cb_message recvMessageBuff;
+  struct NNet_cb_message sendMessageBuff;
 
   struct sockaddr_in addr;
   int peerId;
   int fd;
 };
 
-struct da_client {
-  struct client *items;
+struct NNet_da_client {
+  struct NNet_client *items;
   size_t count;
   size_t capacity;
 };
 
-struct hm_client {
+struct NNet_hm_client {
   uint32_t key;
-  struct client value;
+  struct NNet_client value;
 };
 
 // -- Message brut
-struct message_ack_raw {
+struct NNet_message_ack_raw {
   uint16_t ReceivedSentTime;
 };
 
-struct message_send_raw {
+struct NNet_message_send_raw {
   uint32_t DataLength;
   uint8_t payload[];
 };
 
-struct __attribute__((packed)) message_fragment_raw {
+struct __attribute__((packed)) NNet_message_fragment_raw {
   uint32_t FragmentCount;
   uint32_t FragmentNumber;
   uint32_t TotalLength;
@@ -217,7 +217,7 @@ struct __attribute__((packed)) message_fragment_raw {
   uint8_t payload[];
 };
 
-struct message_base_raw {
+struct NNet_message_base_raw {
   uint8_t CommandFlags;
   uint8_t ChannelID;
 
@@ -232,19 +232,19 @@ struct message_base_raw {
   uint8_t message_part2[];
 };
 
-struct packet_header_opt_time_raw {
+struct NNet_packet_header_opt_time_raw {
   uint16_t time;
 };
 
-struct packet_header_base_raw {
+struct NNet_packet_header_base_raw {
   uint16_t PeerIDFlags;
   uint16_t CommandCount;
-  struct packet_header_opt_time_raw opt_timeSpent[];
+  struct NNet_packet_header_opt_time_raw opt_timeSpent[];
 };
 
 // -- poll
 
-struct da_pollfd {
+struct NNet_da_pollfd {
   struct pollfd *items;
   size_t capacity;
   size_t count;
@@ -256,8 +256,8 @@ struct da_pollfd {
 
 // struct da_xxx waitingAck;
 
-extern struct hm_client *G_hm_client;
-extern struct da_pollfd G_pollfds;
+extern struct NNet_hm_client *G_hm_client;
+extern struct NNet_da_pollfd G_pollfds;
 
 // --------------------------------------------------
 // Function definition
@@ -268,8 +268,8 @@ ssize_t index_of_poll(int fd);
 void net_handle_io();
 // int server_accept(struct pollfd *s_pfd);
 
-void addClient(struct client *clt);
+void addClient(struct NNet_client *clt);
 
-int net_poll(struct message *msg_out);
+int net_poll(struct NNet_message *msg_out);
 
 #endif // __net_H__

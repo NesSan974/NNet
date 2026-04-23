@@ -17,12 +17,12 @@
 
 #include "net.h"
 
-int handleSendMessage(struct cb_message *cb_msg);
+int handleSendMessage(struct NNet_cb_message *cb_msg);
 
 int server_accept(struct pollfd *s_pfd);
 int setDefaultServerSocket();
 
-struct da_pollfd G_pollfds = {0};
+struct NNet_da_pollfd G_pollfds = {0};
 
 // --------------------------------------------------
 // MAIN Function
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
         // Traitement des messages queues
         // ------------------------------
 
-        struct message msg;
+        struct NNet_message msg;
         while (net_poll(&msg)) {
             printf("packet returned from net_poll()\n");
             printf("recv command %d\n", msg.Command);
