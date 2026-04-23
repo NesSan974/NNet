@@ -41,7 +41,9 @@ void handleSendBuff();
 static inline uint64_t now_ms(void);
 uint16_t get_timestamp16(void);
 
-uint16_t getNewPeerId() ;
+uint16_t getNewPeerId();
+
+static inline uint64_t hash_client(struct sockaddr_in sock_addr);
 
 // -----
 
@@ -51,17 +53,13 @@ uint16_t getNewPeerId() {
     last_attributed_peer_id++;
     last_attributed_peer_id &= (uint16_t)(~PACKET_FLAG_MASK);
 
-    return last_attributed_peer_id;
+    // assert(last_attributed_peer_id > 0 );
+
+    return last_attributed_peer_id == 0 ? ++last_attributed_peer_id : last_attributed_peer_id;
 }
 
-uint16_t hash_client(uint32_t addr, uint16_t port) {
-    uint32_t x = addr ^ ((uint32_t)port << 16 | port);
-    x ^= x >> 16;
-    x *= 0x7feb352d;
-    x ^= x >> 15;
-    x *= 0x846ca68b;
-    x ^= x >> 16;
-    return (uint16_t)x;
+static inline uint64_t hash_client(struct sockaddr_in sock_addr) {
+    return ((uint64_t)sock_addr.sin_addr.s_addr << 16) | (uint64_t)sock_addr.sin_port;
 }
 
 static inline uint64_t now_ms(void) {
@@ -193,7 +191,9 @@ int readPacket(int fd) {
         G_pollfds.items[index_of_poll(fd)].fd = -1;
 
         // uint16_t key = ADDR_TO_KEY(addr);
-        stbds_hmdel(G_hm_client, hash_client(addr.sin_addr.s_addr, addr.sin_port));
+        stbds_hmdel(G_hm_client, hash_client(addr));
+
+        free(recv_buff);
         return 0;
     }
 
@@ -217,7 +217,7 @@ int readPacket(int fd) {
         return 0;
     }
 
-    uint16_t client_hmap_key = hash_client(addr.sin_addr.s_addr, addr.sin_port);
+    uint16_t client_hmap_key = hash_client(addr);
     struct NNet_hm_client *hm_client_it = stbds_hmgetp_null(G_hm_client, client_hmap_key);
 
     if (hm_client_it == NULL) {
@@ -228,7 +228,7 @@ int readPacket(int fd) {
         #endif
         /* clang-format on */
 
-        addClient(&(struct NNet_client){.addr = addr, .peerId = client_hmap_key, .fd = fd});
+        addClient(&(struct NNet_client){.addr = addr, .peerId = getNewPeerId(), .fd = fd});
     }
 
     struct NNet_client *clt = &G_hm_client[stbds_hmgeti(G_hm_client, client_hmap_key)].value;
@@ -695,7 +695,7 @@ void addClient(struct NNet_client *clt) {
     assert(clt->recvMessageBuff.items != NULL);
     assert(clt->sendMessageBuff.items != NULL);
 
-    uint32_t client_hmap_key = hash_client(clt->addr.sin_addr.s_addr, clt->addr.sin_port);
+    uint32_t client_hmap_key = hash_client(clt->addr);
 
     stbds_hmput(G_hm_client, client_hmap_key, (*clt));
 }

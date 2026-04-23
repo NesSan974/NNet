@@ -194,7 +194,7 @@ struct NNet_da_client {
 };
 
 struct NNet_hm_client {
-  uint32_t key;
+  uint64_t key;
   struct NNet_client value;
 };
 
