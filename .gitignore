@@ -1,4 +1,3 @@
 .cache/
-.note/
 build/*
 compile_commands.json

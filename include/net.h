@@ -10,15 +10,12 @@
 // --------------------------------------------------
 // DEFINE ZONE
 // --------------------------------------------------
-// #define CLIENT_TO_KEY(client) (((client).addr.sin_addr.s_addr >> 24) | ((client).addr.sin_port <<
-// 8))
 
-// ASKIP au bout de 300 entré ca va faire pas mal de collision
+#define PACKET_RECEIVED (1)
 
-#define SOCK_ERR (-1)
-#define POLLING_ERROR (-1)
-
-#define MAX_MTU_SIZE (1400)
+#define ERROR_SOCKET (-1)
+#define ERROR_DATAGRAM_TOO_BIG (-2)
+#define ERROR_MESSAGE_PARSING (-3)
 
 // MTU ~= 1500, (sur ADSL en Wi-Fi MTU = 1 468 octets.) auquel on enleve header ip et header udp
 // - ip header taille variable jusqu'a max 60octets
@@ -70,26 +67,26 @@
 
 #define cb_enqueue(cb, item)                                                                       \
   do {                                                                                             \
-    if (cb.count < cb.capacity) {                                                                  \
-      cb.items[cb.tail] = item;                                                                    \
-      cb.tail = (cb.tail + 1) % cb.capacity;                                                       \
-      cb.count++;                                                                                  \
+    if ((cb).count < (cb).capacity) {                                                                  \
+        (cb).items[(cb).tail] = (item);                                                                    \
+        (cb).tail = ((cb).tail + 1) % (cb).capacity;                                                       \
+        (cb).count++;                                                                                  \
     }                                                                                              \
   } while (0)
 
 #define cb_dequeue(cb, out)                                                                        \
   do {                                                                                             \
-    if (cb.count > 0) {                                                                            \
-      out = cb.items[cb.head];                                                                     \
-      cb.head = (cb.head + 1) % cb.capacity;                                                       \
-      cb.count--;                                                                                  \
+    if ((cb).count > 0) {                                                                            \
+        (out) = (cb).items[cb.head];                                                                     \
+        (cb).head = ((cb).head + 1) % (cb).capacity;                                                       \
+        (cb).count--;                                                                                  \
     }                                                                                              \
   } while (0)
 
 #define cb_peek(cb, out)                                                                           \
   do {                                                                                             \
-    if (cb.count > 0) {                                                                            \
-      out = cb.items[cb.head];                                                                     \
+    if ((cb).count > 0) {                                                                            \
+        (out) = &(cb).items[(cb).head];                                                                     \
     }                                                                                              \
   } while (0)
 
@@ -97,11 +94,9 @@
 
 
 // NOTE : pourrait etre un uint64 avec des flag nan ?
-struct NNet_context {
-    int fd;
-    int isServer;
-    int isBloquant;
-};
+
+
+
 
 enum NNet_flag {
   PACKET_FLAG_COMPRESSED = (1 << 14), // si commpressé
@@ -189,10 +184,12 @@ struct NNet_client {
 
   struct NNet_cb_message recvMessageBuff;
   struct NNet_cb_message sendMessageBuff;
+  // struct da_xxx waitingAck;
 
   struct sockaddr_in addr;
-  uint16_t peerId;
   int fd;
+  uint16_t peerId;
+
 };
 
 struct NNet_hm_client {
@@ -244,35 +241,40 @@ struct NNet_packet_header_base_raw {
   struct NNet_packet_header_opt_time_raw opt_timeSpent[];
 };
 
-// -- poll
+// --
 
-struct NNet_da_pollfd {
-  struct pollfd *items;
-  size_t capacity;
-  size_t count;
+struct NNet_context {
+    int fd;
+    uint16_t isServer;
+    uint16_t shouldBlock;
+
+    struct NNet_hm_client *hm_client;
 };
+
+typedef struct NNet_context NNet_context;
+
+
 
 // --------------------------------------------------
 // Global variable
 // --------------------------------------------------
 
-// struct da_xxx waitingAck;
-
-extern struct NNet_hm_client *G_hm_client;
 
 // --------------------------------------------------
 // Function definition
 // --------------------------------------------------
 
-ssize_t index_of_poll(int fd);
 
-void NNet_HandleIO();
+
+int NNet_HandleIO(NNet_context *ctx);
 // int server_accept(struct pollfd *s_pfd);
 
-int NNet_ServerCheckRecv();
+void NNet_SendBuff(NNet_context *ctx);
 
-void addClient(struct NNet_client *clt);
+void NNet_free(NNet_context *ctx);
 
-int NNet_Poll(struct NNet_message *msg_out);
+NNet_context *createDefaultServer();
+
+int NNet_Poll(struct NNet_message *msg_out, struct NNet_context *ctx);
 
 #endif // __net_H__
