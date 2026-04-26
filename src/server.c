@@ -28,7 +28,8 @@ int handlMessage(struct NNet_cb_message *cb_msg);
 int main(int argc, char **argv) {
 
     // -- Set-up socket
-    NNet_context *nnet = createDefaultServer();
+    NNet_context *nnet = NNet_CreateDefaultServer();
+    NNet_Init(nnet);
 
     if (!nnet) {
         fprintf(stderr, "error while creating the socket\n");
@@ -38,23 +39,43 @@ int main(int argc, char **argv) {
 
     printf("listening on port '%d'\n", PORT);
 
+    struct pollfd pfd = {.fd = nnet->fd, .events = POLLIN};
+
+    const int tick_duration_msec = 1000 / 128;
+    const int fast_sleep_msec = 1;
+
+    int poll_timeout_msec = tick_duration_msec;
+
     // -- start infinite loop
     while (1) {
+
+        poll(&pfd, 1, poll_timeout_msec);
 
         // -----------------------
         // Traitement reseaux
         // -----------------------
 
-        while (NNet_HandleIO(nnet) == PACKET_RECEIVED)
-            ;
+        int n = NNet_HandleIO(nnet);
+
+        if (n < 0) {
+            fprintf(stderr, "error while recv-ing() : %d\n", n);
+            perror("");
+        } else {
+            poll_timeout_msec = n == BUDGET_HIT ? fast_sleep_msec : tick_duration_msec;
+        }
 
         struct NNet_message msg;
-        while (NNet_Poll(&msg, nnet)) {
-            printf("packet returned from net_poll()\n");
-            printf("recv command %d\n", msg.Command);
+        while (NNet_Poll(nnet, &msg)) {
+            if (msg.ChannelID == 0) {
+                for (int i = 0; i < msg.DataLength; i++) {
+                    printf("%c", msg.payload[i]);
+                }
+                printf("\n");
+            }
         }
 
         // STUFF
+
         NNet_SendBuff(nnet);
     }
 

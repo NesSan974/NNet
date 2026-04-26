@@ -11,237 +11,178 @@
 // DEFINE ZONE
 // --------------------------------------------------
 
-#define PACKET_RECEIVED (1)
+// RETURN FUNCTION / ERROR
 
 #define ERROR_SOCKET (-1)
 #define ERROR_DATAGRAM_TOO_BIG (-2)
 #define ERROR_MESSAGE_PARSING (-3)
+#define ERROR_FIFO_CAPACITY_EXCEEDED (-4)
+#define ERROR_ARRENA_SIZE_EXCEEDED (-5)
 
-// MTU ~= 1500, (sur ADSL en Wi-Fi MTU = 1 468 octets.) auquel on enleve header ip et header udp
-// - ip header taille variable jusqu'a max 60octets
-// - header udp 8 octets
-#define MAX_PKT_SIZE (1400)
+#define BUDGET_HIT (1)
 
-#define MAX_PKT_HEADER_SIZE (6)
-#define MIN_PKT_HEADER_SIZE (4)
+// Option
 
-#define MIN_MSG_HEADER_SIZE (6)
-#define MAX_MSG_HEADER_SIZE (32)
+#define PORT (2202)
+#define ARENA_SIZE (ARENA_DEFAULT_SIZE)
+#define BUDGET (BUDGET_DEFAULT)
+#define FIFO_CAPACITY (100)
 
-#ifndef PORT
-#define PORT 2202
-#endif
-
-#ifndef BACKLOG
-#define BACKLOG 512
-#endif
-
-// -- define dynamic array
-
-#define da_append(da, item)                                                                        \
-  do {                                                                                             \
-    if (da.count >= da.capacity) {                                                                 \
-      if (da.capacity == 0)                                                                        \
-        da.capacity = 256;                                                                         \
-      else                                                                                         \
-        da.capacity *= 2;                                                                          \
-      da.items = realloc(da.items, da.capacity * sizeof(*da.items));                               \
-    }                                                                                              \
-    da.items[da.count++] = item;                                                                   \
-  } while (0)
-
-// --------------------------------------------------
-// Structure
-// --------------------------------------------------
-
-// -- define fixed size circual buffer
-
-// -- define circular buffer
-
-#define cb_init(cb, fixed_size)                                                                    \
-  do {                                                                                             \
-    cb.count = 0;                                                                                  \
-    cb.capacity = fixed_size;                                                                      \
-    cb.items = malloc(fixed_size * sizeof(*cb.items));                                             \
-  } while (0)
-
-#define cb_enqueue(cb, item)                                                                       \
-  do {                                                                                             \
-    if ((cb).count < (cb).capacity) {                                                                  \
-        (cb).items[(cb).tail] = (item);                                                                    \
-        (cb).tail = ((cb).tail + 1) % (cb).capacity;                                                       \
-        (cb).count++;                                                                                  \
-    }                                                                                              \
-  } while (0)
-
-#define cb_dequeue(cb, out)                                                                        \
-  do {                                                                                             \
-    if ((cb).count > 0) {                                                                            \
-        (out) = (cb).items[cb.head];                                                                     \
-        (cb).head = ((cb).head + 1) % (cb).capacity;                                                       \
-        (cb).count--;                                                                                  \
-    }                                                                                              \
-  } while (0)
-
-#define cb_peek(cb, out)                                                                           \
-  do {                                                                                             \
-    if ((cb).count > 0) {                                                                            \
-        (out) = &(cb).items[(cb).head];                                                                     \
-    }                                                                                              \
-  } while (0)
-
-// -- enum
-
-
-// NOTE : pourrait etre un uint64 avec des flag nan ?
-
-
-
+// log the time of some functions
+#undef PROFILE
+// log precision, 0 = none
+#define DEBUG_LOG 1
 
 enum NNet_flag {
-  PACKET_FLAG_COMPRESSED = (1 << 14), // si commpressé
-  PACKET_FLAG_SENT_TIME = (1 << 15),  // Si on envoit le timestamp
-  PACKET_FLAG_OFFSET = (8),
-  PACKET_FLAG_MASK = (PACKET_FLAG_COMPRESSED | PACKET_FLAG_SENT_TIME),
+    PACKET_FLAG_COMPRESSED = (1 << 14), // si commpressé
+    PACKET_FLAG_SENT_TIME = (1 << 15),  // Si on envoit le timestamp
+    PACKET_FLAG_OFFSET = (8),
+    PACKET_FLAG_MASK = (PACKET_FLAG_COMPRESSED | PACKET_FLAG_SENT_TIME),
 
-  MESSAGE_FLAG_ACKNOWLEDGE = (1 << 7),
-  MESSAGE_FLAG_UNSEQUENCED = (1 << 6),
-  MESSAGE_FLAG_MASK = MESSAGE_FLAG_ACKNOWLEDGE | MESSAGE_FLAG_UNSEQUENCED,
+    MESSAGE_FLAG_ACKNOWLEDGE = (1 << 7),
+    MESSAGE_FLAG_UNSEQUENCED = (1 << 6),
+    MESSAGE_FLAG_MASK = MESSAGE_FLAG_ACKNOWLEDGE | MESSAGE_FLAG_UNSEQUENCED,
 
 };
 
 enum NNet_message_command {
-  ACKNOWLEDGE = 0x01,
-  CONNECT = 0x02,
-  VERIFY_CONNECT = 0x03,
-  DISCONNECT = 0x04,
-  PING = 0x05,
-  SEND_RELIABLE = 0x06,
-  SEND_UNRELIABLE = 0x07,
-  SEND_FRAGMENT = 0x08,
-  SEND_UNSEQUENCED = 0x09,
-  BANDWIDTH_LIMIT = 0x0A,
-  THROTTLE_CONFIGURE = 0x0B,
-  SEND_UNRELIABLE_FRAGMENT = 0x0C,
+
+    MSG_ACKNOWLEDGE = 0x01,
+    MSG_CONNECT = 0x02,
+    MSG_VERIFY_CONNECT = 0x03,
+    MSG_DISCONNECT = 0x04,
+    MSG_PING = 0x05,
+    MSG_SEND_RELIABLE = 0x06,
+    MSG_SEND_UNRELIABLE = 0x07,
+    MSG_SEND_FRAGMENT = 0x08,
+    MSG_SEND_UNSEQUENCED = 0x09,
+    MSG_BANDWIDTH_LIMIT = 0x0A,
+    MSG_THROTTLE_CONFIGURE = 0x0B,
+    MSG_SEND_UNRELIABLE_FRAGMENT = 0x0C,
 };
 
 // -- Message parsé
 
 struct NNet_packet_header {
-  uint16_t PeerID;
-  uint16_t CommandCount;
-  uint16_t SentTime;
-  uint16_t flags;
+    uint16_t PeerID;
+    uint16_t CommandCount;
+    uint16_t SentTime;
+    uint16_t flags;
 };
 
 struct NNet_message {
-  uint8_t Command;
-  uint8_t ChannelID;
-  union {
-    uint16_t seq_number;
-    uint16_t ReceivedSeqNumber;
-    uint16_t UnreliableSeqNumber;
-    uint16_t ReliableSeqNumber;
-  };
-  unsigned char isDisable;
-  uint8_t flags;
-
-  struct NNet_packet_header packet_header;
-  // --
-
-  uint8_t *payload;
-
-  union {
-    struct { // fragment
-      uint32_t FragmentCount;
-      uint32_t FragmentNumber;
-      uint32_t FragmentOffset;
-      uint32_t TotalLength;
-      uint16_t StartSeq;
+    uint8_t Command;
+    uint8_t ChannelID;
+    union {
+        uint16_t seq_number;
+        uint16_t ReceivedSeqNumber;
+        uint16_t UnreliableSeqNumber;
+        uint16_t ReliableSeqNumber;
     };
-    struct { // ack
-      uint16_t ReceivedSentTime;
-    };
-    struct { // send
-      uint32_t DataLength;
-    };
-  };
+    uint8_t flags;
 
-  // padding + 6 mais osef
+    struct NNet_packet_header packet_header;
+    // --
+
+    uint8_t *payload;
+
+    union {
+        struct { // fragment
+            uint32_t FragmentCount;
+            uint32_t FragmentNumber;
+            uint32_t FragmentOffset;
+            uint32_t TotalLength;
+            uint16_t StartSeq;
+        };
+        struct { // ack
+            uint16_t ReceivedSentTime;
+        };
+        struct { // send
+            uint32_t DataLength;
+        };
+    };
+
+    // padding + 6 mais osef
 };
 
 struct NNet_cb_message {
-  struct NNet_message *items;
+    struct NNet_message *items;
 
-  size_t head;
-  size_t tail;
-  size_t count;
-  size_t capacity;
+    size_t head;
+    size_t tail;
+    size_t count;
+    size_t capacity;
 };
 
 // -- CLIENT
 struct NNet_client {
 
-  struct NNet_cb_message recvMessageBuff;
-  struct NNet_cb_message sendMessageBuff;
-  // struct da_xxx waitingAck;
+    struct NNet_cb_message recvMessageBuff;
+    struct NNet_cb_message sendMessageBuff;
+    // struct da_xxx waitingAck; time wheel ?
 
-  struct sockaddr_in addr;
-  int fd;
-  uint16_t peerId;
-
+    struct sockaddr_in addr;
+    uint16_t peerId;
+    uint8_t connexion_state;
 };
 
 struct NNet_hm_client {
-  uint64_t key;
-  struct NNet_client value;
+    uint64_t key;
+    struct NNet_client value;
 };
 
 // -- Message brut
 struct NNet_message_ack_raw {
-  uint16_t ReceivedSentTime;
+    uint16_t ReceivedSentTime;
 };
 
 struct NNet_message_send_raw {
-  uint32_t DataLength;
-  uint8_t payload[];
+    uint32_t DataLength;
+    uint8_t payload[];
 };
 
 struct __attribute__((packed)) NNet_message_fragment_raw {
-  uint32_t FragmentCount;
-  uint32_t FragmentNumber;
-  uint32_t TotalLength;
-  uint32_t FragmentOffset;
-  uint16_t StartSeq;
-  uint8_t payload[];
+    uint32_t FragmentCount;
+    uint32_t FragmentNumber;
+    uint32_t TotalLength;
+    uint32_t FragmentOffset;
+    uint16_t StartSeq;
+    uint8_t payload[];
 };
 
-struct NNet_message_base_raw {
-  uint8_t CommandFlags;
-  uint8_t ChannelID;
+struct __attribute__((packed)) NNet_message_base_raw {
+    uint8_t CommandFlags;
+    uint8_t ChannelID;
 
-  // TODO : dispactch seq number dans les struct de part2 et créer un
-  // struct 'message_send_unseq' ou il ne sera pas présent
-  union {
-    uint16_t seq_number;
-    uint16_t UnreliableSeqNumber;
-    uint16_t ReceivedSeqNumber;
-    uint16_t ReliableSeqNumber;
-  };
-  uint8_t message_part2[];
+    // TODO : dispactch seq number dans les struct de part2 et créer un
+    // struct 'message_send_unseq' ou il ne sera pas présent
+    union {
+        uint16_t seq_number;
+        uint16_t UnreliableSeqNumber;
+        uint16_t ReceivedSeqNumber;
+        uint16_t ReliableSeqNumber;
+    };
+    uint8_t message_part2[];
 };
 
 struct NNet_packet_header_opt_time_raw {
-  uint16_t time;
+    uint16_t time;
 };
 
 struct NNet_packet_header_base_raw {
-  uint16_t PeerIDFlags;
-  uint16_t CommandCount;
-  struct NNet_packet_header_opt_time_raw opt_timeSpent[];
+    uint16_t PeerIDFlags;
+    uint16_t CommandCount;
+    struct NNet_packet_header_opt_time_raw opt_timeSpent[];
 };
 
 // --
+
+struct da_message {
+    struct NNet_message *items;
+
+    size_t capacity;
+    size_t count;
+};
 
 struct NNet_context {
     int fd;
@@ -249,32 +190,37 @@ struct NNet_context {
     uint16_t shouldBlock;
 
     struct NNet_hm_client *hm_client;
+
+    // struct da_message shared_broadcast_buffer;
 };
 
 typedef struct NNet_context NNet_context;
-
-
-
+typedef struct NNet_client NNet_client;
+typedef struct NNet_message NNet_message ;
 // --------------------------------------------------
-// Global variable
-// --------------------------------------------------
-
-
-// --------------------------------------------------
-// Function definition
+// Function declaration
 // --------------------------------------------------
 
+void NNet_Init(NNet_context *ctx);
 
-
+// @return 0 if all good
+// @return BUDGET_HIT if budget hit (BUDGET macro can be defined)
+// @return negative number if error
+// @error ERROR_SOCKET, ERROR_DATAGRAM_TOO_BIG, ERROR_MESSAGE_PARSING
 int NNet_HandleIO(NNet_context *ctx);
-// int server_accept(struct pollfd *s_pfd);
+
+// @return 0 if all good
+// @return negative number if error
+// @error ERROR_FIFO_CAPACITY_EXCEEDED, ERROR_ARRENA_SIZE_EXCEEDED
+int NNet_SendMessage(NNet_client *clt, uint8_t *buff, size_t buff_size);
 
 void NNet_SendBuff(NNet_context *ctx);
 
+NNet_context *NNet_CreateDefaultServer();
+NNet_context *NNet_CreateDefaultClient(uint32_t addr_network_order);
+
+int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out);
+
 void NNet_free(NNet_context *ctx);
-
-NNet_context *createDefaultServer();
-
-int NNet_Poll(struct NNet_message *msg_out, struct NNet_context *ctx);
 
 #endif // __net_H__

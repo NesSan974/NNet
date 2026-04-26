@@ -1,5 +1,13 @@
 
-raylib
-Gui interface avec raylay
-TCP avec json rpc
-ENET-like
+# projet NNet
+
+fait partie d'un plus grandprojet comprenant :
+- raylib  
+- Gui interface avec raylay
+- Hexagone
+- tour par tour
+- json rpc
+- NNet
+
+
+perf report --latency -i .note/perf2.data

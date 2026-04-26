@@ -1,102 +1,54 @@
 
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdalign.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
+
+#include <assert.h>
 
 #include "net.h"
 
-struct da_int {
-  int *items;
-
-  size_t count;
-  size_t capacity;
-};
-
-// struct da_client G_da_client = {0};
-
 int main(int argc, char **argv) {
 
-  struct sockaddr_in addr = {
-      .sin_family = AF_INET,                     /* AF_INET */
-      .sin_port = htons(PORT),                   /* Port number */
-      .sin_addr.s_addr = htonl(INADDR_LOOPBACK), /* IPv4 address */
-  };
+    // uint32_t ip_add;
+    // inet_pton(AF_INET, "192.168.1.130", &ip_add);
 
-  char *msg1_payload = "coucou les harribo";
-  int msg1_payload_size = strlen(msg1_payload);
+    NNet_context *ctx = NNet_CreateDefaultClient(htonl(INADDR_LOOPBACK));
 
-  const int total_packet_size =
-      sizeof(struct NNet_packet_header_base_raw) + sizeof(struct NNet_packet_header_opt_time_raw) +
-      sizeof(struct NNet_message_base_raw) + sizeof(struct NNet_message_send_raw) + msg1_payload_size;
+    NNet_Init(ctx);
 
-  uint8_t *send_buff = malloc(total_packet_size);
-  size_t buff_it = 0;
+    struct pollfd pfd = {.fd = ctx->fd, .events = POLLIN};
 
-  struct NNet_packet_header_base_raw *ph = (struct NNet_packet_header_base_raw *)send_buff;
+    while (1) {
 
-  ph->PeerIDFlags = htons(1);
-  ph->PeerIDFlags |= PACKET_FLAG_SENT_TIME;
-  ph->CommandCount = ntohs(1);
-  buff_it += sizeof(*ph);
+        poll(&pfd, 1, 1000);
 
-  ph->opt_timeSpent->time = 100;
-  buff_it += sizeof(*ph->opt_timeSpent);
+        int n = NNet_HandleIO(ctx);
 
-  // Message 1
-  // -- command & flags
+        if (n < 0) {
+            fprintf(stderr, "error while recv-ing()\n");
+            perror("");
+        }
 
-  struct NNet_message_base_raw *msg1 = (struct NNet_message_base_raw *)(send_buff + buff_it);
+        struct NNet_message msg = {0};
+        while (NNet_Poll(ctx, &msg)) {
+        }
 
-  msg1->CommandFlags = SEND_RELIABLE | MESSAGE_FLAG_ACKNOWLEDGE;
-  msg1->ChannelID = 22;
-  msg1->ReliableSeqNumber = htons(2200);
-  buff_it += sizeof(*msg1);
+        char buff[50];
+        for (size_t i = 0; i < 213; i++) {
+            sprintf(buff, "message n°%ld - j'adore les pastabox avec du sucre", i);
+            int a = NNet_SendMessage(&ctx->hm_client[0].value, (uint8_t *)buff, strlen(buff));
+        }
 
-  struct NNet_message_send_raw *msg1_part2 = (struct NNet_message_send_raw *)(msg1->message_part2);
-  msg1_part2->DataLength = htonl(msg1_payload_size);
-  memcpy(msg1_part2->payload, msg1_payload, msg1_payload_size);
-
-  buff_it += sizeof(*msg1_part2) + msg1_payload_size;
-
-  const int nb = 2;
-  struct da_int fds = {0};
-
-  for (size_t i = 0; i < nb; i++) {
-    int f = socket(AF_INET, SOCK_STREAM, 0);
-    da_append(fds, f);
-  }
-
-  alignas(struct NNet_packet_header_base_raw) uint8_t recvbuff[MAX_PKT_SIZE];
-  for (size_t i = 0; i < nb; i++) {
-
-    if (connect(fds.items[i], (const struct sockaddr *)&addr, sizeof(addr)) == -1) {
-      perror("impossible to connect the socket");
-      return -1;
+        NNet_SendBuff(ctx);
     }
 
-    ssize_t n = send(fds.items[i], send_buff, buff_it, 0);
-
-    n = recv(fds.items[i], recvbuff, MAX_PKT_SIZE, 0);
-    if (n > 0) {
-
-        struct NNet_packet_header_base_raw *ph = (struct NNet_packet_header_base_raw *)recvbuff;
-
-      printf("recv: \n\tpeerID: %d\n\tflag: %d\n\tcommandCount: %d\n",
-             ntohs( ph->PeerIDFlags & (~PACKET_FLAG_MASK) ),
-             ph->PeerIDFlags & (PACKET_FLAG_MASK),
-             ntohs(ph->CommandCount));
-    }
-  }
-
-  printf("%d request sended\n", nb);
-
-  free(send_buff);
-
-  return 0;
+    return 0;
 }
