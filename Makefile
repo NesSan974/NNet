@@ -1,6 +1,6 @@
 
 # cd ${0%/*}
-.PHONY : all server client clean help
+.PHONY : reset all server client help
 
 # help :
 # 	@echo "Utilisation : make command"
@@ -12,8 +12,6 @@
 # 	@echo " server"
 # 	@printf "\t server descr\n\n"
 
-
-
 all : server client
 
 server : build/server
@@ -21,16 +19,27 @@ server : build/server
 client : build/client
 
 clean :
-	rm -v build/obj/net.o build/server build/client
+	rm -r build/*
 
-build/server : build/obj/net.o src/server.c
+build/server : build/obj/net_server.o build/obj/server.o
 	mkdir -p build
-	gcc -o $@ -g -O0 build/obj/net.o src/server.c -fno-omit-frame-pointer -Iinclude
+	gcc -o $@ -g -O0 build/obj/net_server.o build/obj/server.o -fno-omit-frame-pointer -Iinclude
 
-build/obj/net.o :
+build/obj/server.o : src/server.c
+	gcc -o $@ -g -O0 -c src/server.c -Iinclude -fno-omit-frame-pointer
+
+build/client : build/obj/net_client.o build/obj/client.o
+	mkdir -p build
+	gcc -o $@ -g -O0 build/obj/client.o build/obj/net_client.o -fno-omit-frame-pointer -Iinclude
+
+build/obj/client.o : src/client.c
+	gcc -o $@ -g -O0 -c src/client.c -Iinclude -fno-omit-frame-pointer
+
+
+build/obj/net_server.o :
 	mkdir -p build/obj
 	gcc -o $@ -g -O0 -c src/net.c -fno-omit-frame-pointer -Iinclude
 
-build/client : build/obj/net.o src/client.c
-	mkdir -p build
-	gcc -o $@ -g -O0 src/client.c build/obj/net.o -fno-omit-frame-pointer -Iinclude
+build/obj/net_client.o :
+	mkdir -p build/obj
+	gcc -DBUDGET=16384 -o $@ -g -O0 -c src/net.c -fno-omit-frame-pointer -Iinclude

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 typedef struct {
     uint8_t *buffer;
@@ -11,10 +12,11 @@ typedef struct {
 } Arena;
 
 // créer l'arena
-#define arena_create(arena, size)                                                                  \
-    arena.buffer = malloc(size);                                                                   \
-    arena.capacity = (size);                                                                       \
-    arena.offset = 0;
+void arena_create(Arena *arena, size_t size) {
+    arena->buffer = malloc(size);
+    arena->capacity = (size);
+    arena->offset = 0;
+}
 
 // allouer dans l'arena
 void *arena_alloc(Arena *arena, size_t size) {
@@ -28,13 +30,16 @@ void *arena_alloc(Arena *arena, size_t size) {
     return ptr;
 }
 
-#define arena_reset(arena) arena.offset = 0;
+void arena_reset(Arena* arena){
+    arena->offset = 0;
+}
 
 // destruction
-#define arena_destroy(arena)                                                                       \
-    free(arena.buffer);                                                                            \
-    arena.buffer = NULL;                                                                           \
-    arena.capacity = 0;                                                                                \
-    arena.offset = 0;
+void arena_destroy(Arena *arena) {
+    free(arena->buffer);
+    arena->buffer = NULL;
+    arena->capacity = 0;
+    arena->offset = 0;
+}
 
 #endif //__ARENA_H__

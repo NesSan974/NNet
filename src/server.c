@@ -1,10 +1,10 @@
 #include <assert.h>
-#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <string.h>
 #include <sys/time.h>
 
 #include <poll.h>
@@ -39,6 +39,18 @@ int main(int argc, char **argv) {
 
     printf("listening on port '%d'\n", PORT);
 
+    char file_json[2048];
+    FILE *file = fopen("./example.jsonrpc", "r");
+    if (file == NULL)
+    {
+        perror("fopen");
+        abort();
+    }
+    size_t file_read = fread(file_json, 1, 2048, file);
+    printf("file_read %ld\n", file_read);
+
+
+
     struct pollfd pfd = {.fd = nnet->fd, .events = POLLIN};
 
     const int tick_duration_msec = 1000 / 128;
@@ -55,31 +67,33 @@ int main(int argc, char **argv) {
         // Traitement reseaux
         // -----------------------
 
-        int n = NNet_HandleIO(nnet);
+        int net_read = NNet_HandleRead(nnet);
 
-        if (n < 0) {
-            fprintf(stderr, "error while recv-ing() : %d\n", n);
+        if (net_read < 0) {
+            fprintf(stderr, "error while recv-ing() : %d\n", net_read);
             perror("");
         } else {
-            poll_timeout_msec = n == BUDGET_HIT ? fast_sleep_msec : tick_duration_msec;
+            poll_timeout_msec = net_read == BUDGET_HIT ? fast_sleep_msec : tick_duration_msec;
         }
 
-        struct NNet_message msg;
-        while (NNet_Poll(nnet, &msg)) {
-            if (msg.ChannelID == 0) {
-                for (int i = 0; i < msg.DataLength; i++) {
-                    printf("%c", msg.payload[i]);
-                }
-                printf("\n");
+        struct NNet_message msg = {0};
+
+        while ( NNet_Poll(nnet, &msg) ) {
+
+            if ( memcmp(msg.payload, "2", msg.DataLength) == 0 )
+            {
+                printf("\npayload = 2\n");
+
+                printf("addr %x, port %d\n", msg.client->addr.sin_addr.s_addr, ntohs(msg.client->addr.sin_port));
+
+                NNet_SendMessage(msg.client, (uint8_t*)file_json, file_read);
             }
         }
 
-        // STUFF
-
-        NNet_SendBuff(nnet);
+        NNet_HandleSend(nnet);
     }
 
-    NNet_free(nnet);
+    NNet_clean(nnet);
 
     return 0;
 }
