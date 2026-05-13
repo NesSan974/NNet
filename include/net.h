@@ -32,7 +32,8 @@
 // log precision, 0 = none
 #define DEBUG_LOG 1
 
-
+#define TIME_PER_WHEEL_SLOT_MS 16
+#define ACK_TIME_OUT_MS 64
 
 typedef struct NNet_context NNet_context;
 typedef struct NNet_client  NNet_client;
@@ -136,12 +137,20 @@ struct NNet_cb_message {
     size_t capacity;
 };
 
+struct da_message {
+    struct NNet_message *items;
+
+    size_t capacity;
+    size_t count;
+};
+
 // -- CLIENT
 struct NNet_client {
 
     struct NNet_cb_message recvMessageBuff;
     struct NNet_cb_message sendMessageBuff;
-    // struct da_xxx waitingAck; time wheel ?
+
+    struct da_message waitingAck;
 
     struct sockaddr_in addr;
 
@@ -199,13 +208,6 @@ struct NNet_packet_header_base_raw {
 };
 
 // --
-
-struct da_message {
-    struct NNet_message *items;
-
-    size_t capacity;
-    size_t count;
-};
 
 struct NNet_context {
     int fd;

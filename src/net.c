@@ -55,17 +55,43 @@
 
 #define POSIX_ERROR (-1)
 
+#define TW_NB_SLOT (16)
+
 // --------------------------------------------------
-// enum definition
+// enum / structure
 // --------------------------------------------------
 
 enum connexion_state { CS_CONNECTING, CS_ESTABLISHED };
+
+enum time_wheel_type {
+    TIMER_CLIENT_TIMEOUT,
+    TIMER_RETRANSMIT,
+    TIMER_KEEPALIVE,
+};
+
+struct time_wheel_item {
+    enum time_wheel_type type;
+    int remaining_cycle; // not use for now
+
+    struct NNet_client *client;
+    struct NNet_message msg;
+};
+
+struct da_tw_item {
+    struct time_wheel_item *items;
+
+    size_t capacity;
+    size_t count;
+};
 
 // --------------------------------------------------
 // Global variable
 // --------------------------------------------------
 
 static Arena payload_arena;
+struct da_tw_item time_wheel[TW_NB_SLOT] = {0};
+
+size_t wheel_cursor = 0;
 
 // --------------------------------------------------
 // Function declaration
@@ -136,6 +162,8 @@ size_t buildPacketPayloadFromFIFO(struct NNet_cb_message *cb_message,
 
 int defaultHandshake(NNet_context *ctx);
 
+void handleRecvACK(struct NNet_client *clt, struct NNet_message *ack_msg);
+
 // ------------------
 
 int NNet_SendMessage(NNet_client *clt, uint8_t *buff, size_t buff_size) {
@@ -155,6 +183,8 @@ int NNet_SendMessage(NNet_client *clt, uint8_t *buff, size_t buff_size) {
     msg.packet_header.PeerID = clt->peerId;
     msg.DataLength = buff_size;
     msg.ReliableSeqNumber = 666;
+    msg.flags = MESSAGE_FLAG_ACKNOWLEDGE;
+    msg.client = clt;
 
     msg.payload = arena_alloc(&payload_arena, buff_size);
     if (msg.payload == NULL) {
@@ -769,6 +799,60 @@ size_t getMessageSize(struct NNet_message *msg, size_t rest_packet_payload_size)
 
 void NNet_HandleSend(NNet_context *ctx) {
 
+    static uint32_t timestamp_of_last_call = 0;
+    uint32_t elapsed_since_last_call = getTimestamp32() - timestamp_of_last_call;
+
+    timestamp_of_last_call = getTimestamp32();
+
+    // printf("timestamp_of_last_call %d, elapsed_since_last_call %d\n", timestamp_of_last_call,
+    // elapsed_since_last_call);
+
+    while (elapsed_since_last_call / TIME_PER_WHEEL_SLOT_MS >= 1) {
+        // printf("wheel_cursor %ld\n", wheel_cursor);
+        wheel_cursor = (wheel_cursor + 1) % TW_NB_SLOT;
+
+        // printf("elapsed_since_last_call / TIME_PER_WHEEL_SLOT_MS %d\n", elapsed_since_last_call /
+        // TIME_PER_WHEEL_SLOT_MS);
+        for (size_t i_twi = 0; i_twi < time_wheel[wheel_cursor].count; i_twi++) {
+            struct time_wheel_item twi = time_wheel[wheel_cursor].items[i_twi];
+
+            switch (twi.type) {
+
+            case TIMER_RETRANSMIT:
+                printf("TIMER_RETRANSMIT (ts : %ld)\n", wheel_cursor);
+
+                for (size_t i_ack = 0; i_ack < twi.msg.client->waitingAck.count; i_ack++) {
+
+                    if (twi.msg.client->waitingAck.items[i_ack].ReliableSeqNumber == twi.msg.ReliableSeqNumber) {
+
+                        nesds_cbenqueue(twi.msg.client->sendMessageBuff, twi.msg);
+
+                        size_t new_time_slot = wheel_cursor + (ACK_TIME_OUT_MS / TIME_PER_WHEEL_SLOT_MS);
+
+                        nesds_daappend(time_wheel[new_time_slot], twi);
+                        break;
+                    }
+                }
+                break;
+
+            case TIMER_CLIENT_TIMEOUT:
+                assert(0 && "time wheel not implemented yet");
+                break;
+
+            case TIMER_KEEPALIVE:
+                assert(0 && "time wheel not implemented yet");
+                break;
+
+            default:
+                assert(0 && "NNet_HandleSend(), UNREACHABLE HIT");
+            }
+
+            nesds_daremove(time_wheel[wheel_cursor], i_twi);
+        }
+
+        elapsed_since_last_call -= TIME_PER_WHEEL_SLOT_MS;
+    };
+
     for (size_t client_it = 0; client_it < stbds_hmlen(ctx->hm_client); client_it++) {
 
         struct NNet_client *clt = &ctx->hm_client[client_it].value;
@@ -780,6 +864,7 @@ void NNet_HandleSend(NNet_context *ctx) {
 }
 
 int handleClientSend(NNet_context *ctx, NNet_client *clt) {
+
     while (clt->sendMessageBuff.count > 0) {
 
         uint16_t message_count = 0;
@@ -812,20 +897,19 @@ int handleClientSend(NNet_context *ctx, NNet_client *clt) {
             perror("impossible to send");
         }
 
-        #if DEBUG_LOG >= 1
-                printf("[sendto] addr : %x:%d, %ld octets\n", clt->addr.sin_addr.s_addr, ntohs(clt->addr.sin_port),
-                    send_size);
-        #endif
-        #if DEBUG_LOG >= 2
-                printf("\tcmd count : %d\n", message_count);
-        #endif
+#if DEBUG_LOG >= 1
+        printf("[sendto] addr : %x:%d, %ld octets\n", clt->addr.sin_addr.s_addr, ntohs(clt->addr.sin_port),
+               send_size);
+#endif
+#if DEBUG_LOG >= 2
+        printf("\tcmd count : %d\n", message_count);
+#endif
     }
 
     return 0;
 }
 
 size_t buildPacketHeader(struct NNet_packet_header *ph, uint8_t packet[MAX_PKT_HEADER_SIZE]) {
-
 
     size_t estimated_packet_header_size = sizeof(struct NNet_packet_header_base_raw);
 
@@ -855,6 +939,7 @@ size_t buildPacketPayloadFromFIFO(struct NNet_cb_message *fifo,
     uint8_t *packet_payload = buffer;
     size_t pkt_payload_size = 0;
 
+
     while (fifo->count > 0) {
 
         struct NNet_message *msg_peek = NULL;
@@ -869,6 +954,20 @@ size_t buildPacketPayloadFromFIFO(struct NNet_cb_message *fifo,
 
         struct NNet_message msg;
         nesds_cbdequeue((*fifo), msg);
+
+        if (msg.flags & MESSAGE_FLAG_ACKNOWLEDGE) {
+
+            struct time_wheel_item tw_it = {
+                .type = TIMER_RETRANSMIT,
+                .remaining_cycle = ACK_TIME_OUT_MS / 16 * 16,
+                .msg = msg,
+            };
+
+            size_t time_slot = (wheel_cursor + ((ACK_TIME_OUT_MS % (16 * 16)) / TIME_PER_WHEEL_SLOT_MS)) % TW_NB_SLOT;
+
+            nesds_daappend(time_wheel[time_slot], tw_it);
+        }
+
 
         size_t msg_raw_wrote = serializeMessage(&msg, packet_payload + pkt_payload_size);
         pkt_payload_size += msg_raw_wrote;
@@ -938,7 +1037,6 @@ void sendVerifyConnect(struct NNet_client *clt, uint16_t recv_seq_num) {
 int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out) {
 
     struct NNet_client *clt;
-
     for (size_t client_it = 0; client_it < stbds_hmlen(ctx->hm_client); client_it++) {
 
         clt = &ctx->hm_client[client_it].value;
@@ -956,10 +1054,11 @@ int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out) {
 
             if (msg_out->flags & MESSAGE_FLAG_ACKNOWLEDGE) {
                 struct NNet_message msg2send = {
-                    .Type = msg_out->Type,
+                    .Type = MSG_ACKNOWLEDGE,
                     .ChannelID = msg_out->ChannelID,
                     .ReceivedSeqNumber = msg_out->ReliableSeqNumber,
                     .ReceivedSentTime = getTimestamp32(),
+                    .client = clt,
                 };
 
                 nesds_cbenqueue(clt->sendMessageBuff, msg2send);
@@ -981,8 +1080,6 @@ int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out) {
                 // TODO 22 oui
                 sendVerifyConnect(clt, 22);
 
-                should_return = 1;
-
                 break;
 
             case MSG_VERIFY_CONNECT:
@@ -995,8 +1092,6 @@ int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out) {
                 clt->connexion_state = CS_ESTABLISHED;
                 // }
 
-                should_return = 1;
-
                 break;
 
             case MSG_SEND_FRAGMENT:
@@ -1005,8 +1100,7 @@ int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out) {
                 break;
 
             case MSG_ACKNOWLEDGE:
-                // on doit verifier la liste des msg devant etre ack
-                // clt->waitingForAck // -> linked list or hmap or fifo ?
+                handleRecvACK(clt, msg_out);
                 break;
 
             case MSG_SEND_RELIABLE:
@@ -1024,8 +1118,20 @@ int NNet_Poll(struct NNet_context *ctx, struct NNet_message *msg_out) {
             }
         }
     }
+
     // TODO poll pending_clients pour les connects
+
     return 0;
+}
+
+void handleRecvACK(struct NNet_client *clt, struct NNet_message *ack_msg) {
+    for (size_t i = 0; i < clt->waitingAck.count; i++) {
+        if (ack_msg->ReceivedSeqNumber == clt->waitingAck.items[i].ReliableSeqNumber) {
+
+            nesds_daremove(clt->waitingAck, i);
+            return;
+        }
+    }
 }
 
 void NNet_clean(NNet_context *ctx) {
@@ -1076,7 +1182,15 @@ NNet_context *NNet_CreateDefaultServer() {
     return ctx;
 }
 
-void NNet_Init(NNet_context *ctx) { arena_create(&payload_arena, ARENA_SIZE); }
+void NNet_Init(NNet_context *ctx) {
+    arena_create(&payload_arena, ARENA_SIZE);
+
+    for (int i = 0; i < TW_NB_SLOT; i++) {
+        time_wheel[i].items = NULL;
+        time_wheel[i].capacity = 0;
+        time_wheel[i].count = 0;
+    }
+}
 
 NNet_context *NNet_CreateDefaultClient(uint32_t addr_network_order) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);

@@ -12,17 +12,26 @@
     }
  */
 
-#define nesds_daappend(da, item)                                                                   \
-    do {                                                                                           \
-        if ((da).count >= (da).capacity) {                                                         \
-            if ((da).capacity == 0) {                                                              \
-                (da).capacity = 256;                                                               \
-            } else {                                                                               \
-                (da).capacity *= 2;                                                                \
-            }                                                                                      \
-            (da).items = realloc((da).capacity);                                                   \
-        }                                                                                          \
-        (da).items[(da).count++] = (item);                                                         \
+#define nesds_daappend(da, item)                                                                                  \
+    do {                                                                                                          \
+        if ((da).count >= (da).capacity) {                                                                        \
+            if ((da).capacity == 0) {                                                                             \
+                (da).capacity = 256;                                                                              \
+            } else {                                                                                              \
+                (da).capacity *= 2;                                                                               \
+            }                                                                                                     \
+            (da).items = realloc((da).items, (da).capacity * sizeof(item));                                       \
+        }                                                                                                         \
+        (da).items[(da).count++] = (item);                                                                        \
+    } while (0)
+
+#define nesds_daremove(da, i)                                                                                     \
+    do {                                                                                                          \
+        size_t j = (i);                                                                                           \
+        if (j < (da).count)                                                                                       \
+            (da).items[j] = (da).items[--(da).count];                                                             \
+        else if (j == (da).count)                                                                                 \
+            (da).count -= 1;                                                                                      \
     } while (0)
 
 /*
@@ -39,37 +48,36 @@
 
  */
 
-#define nesds_cbinit(cb, fixed_size)                                                               \
-    do {                                                                                           \
-        cb.count = 0;                                                                              \
-        cb.capacity = fixed_size;                                                                  \
-        cb.items = malloc(fixed_size * sizeof(*cb.items));                                         \
+#define nesds_cbinit(cb, fixed_size)                                                                              \
+    do {                                                                                                          \
+        cb.count = 0;                                                                                             \
+        cb.capacity = fixed_size;                                                                                 \
+        cb.items = malloc(fixed_size * sizeof(*cb.items));                                                        \
     } while (0)
 
-
-#define nesds_cbenqueue(cb, item)                                                                  \
-    do {                                                                                           \
-        if ((cb).count < (cb).capacity) {                                                          \
-            (cb).items[(cb).tail] = (item);                                                        \
-            (cb).tail = ((cb).tail + 1) % (cb).capacity;                                           \
-            (cb).count++;                                                                          \
-        }                                                                                          \
+#define nesds_cbenqueue(cb, item)                                                                                 \
+    do {                                                                                                          \
+        if ((cb).count < (cb).capacity) {                                                                         \
+            (cb).items[(cb).tail] = (item);                                                                       \
+            (cb).tail = ((cb).tail + 1) % (cb).capacity;                                                          \
+            (cb).count++;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
-#define nesds_cbdequeue(cb, out)                                                                   \
-    do {                                                                                           \
-        if ((cb).count > 0) {                                                                      \
-            (out) = (cb).items[cb.head];                                                           \
-            (cb).head = ((cb).head + 1) % (cb).capacity;                                           \
-            (cb).count--;                                                                          \
-        }                                                                                          \
+#define nesds_cbdequeue(cb, out)                                                                                  \
+    do {                                                                                                          \
+        if ((cb).count > 0) {                                                                                     \
+            (out) = (cb).items[cb.head];                                                                          \
+            (cb).head = ((cb).head + 1) % (cb).capacity;                                                          \
+            (cb).count--;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
-#define nesds_cbpeek(cb, out)                                                                      \
-    do {                                                                                           \
-        if ((cb).count > 0) {                                                                      \
-            (out) = &(cb).items[(cb).head];                                                        \
-        }                                                                                          \
+#define nesds_cbpeek(cb, out)                                                                                     \
+    do {                                                                                                          \
+        if ((cb).count > 0) {                                                                                     \
+            (out) = &(cb).items[(cb).head];                                                                       \
+        }                                                                                                         \
     } while (0)
 
 #ifndef NESDS_NO_SHORT_NAMES
