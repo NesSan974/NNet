@@ -68,7 +68,7 @@ Exemple d'un paquet fragmenter :
 └───────────────────────────────┘
 ```
 
-En header flag il y a 2 flag et un mask :
+En header flag il y a 2 flag :
 ```C
 ENET_PROTOCOL_HEADER_FLAG_COMPRESSED = (1 << 14), // si commpressé
 ENET_PROTOCOL_HEADER_FLAG_SENT_TIME  = (1 << 15), // Si on envoit le timestamp
@@ -102,25 +102,3 @@ determiner VERIFY_CONNECT et CONNECT
 | └─ Received Sent Time          │
 ├────────────────────────────────┤
 ```
-
-
-
-
-
-
-
-
-┌────────────────────────────────┐
-│                                │ 
-│                                │  
-│         paket header           │
-│                                │
-│                                │
-├────────────────────────────────┤  
-│        payload/body            │
-│┌──────────────────────────────┐│   
-││        Message header        ││
-│├──────────────────────────────┤│
-││     Message payload          ││  
-│└──────────────────────────────┘│
-└────────────────────────────────┘
