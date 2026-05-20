@@ -82,9 +82,9 @@ int main(int argc, char **argv) {
 
             if ( memcmp(msg.payload, "2", msg.DataLength) == 0 )
             {
-                printf("\npayload = 2\n");
+                // printf("\npayload = 2\n");
 
-                printf("addr %x, port %d\n", msg.client->addr.sin_addr.s_addr, ntohs(msg.client->addr.sin_port));
+                // printf("addr %x, port %d\n", msg.client->addr.sin_addr.s_addr, ntohs(msg.client->addr.sin_port));
 
                 NNet_SendMessage(msg.client, (uint8_t*)file_json, file_read);
             }

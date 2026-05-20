@@ -30,11 +30,13 @@ int main(int argc, char **argv) {
     char buff[16];
     int a = 0;
 
-    // for (i = 0; i < 64 * 300 && a >= 0; i++) {
-    //     sprintf(buff, "%ld", i++);
-    //     a = NNet_SendMessage(&ctx->hm_client[0].value, (uint8_t *)buff, strlen(buff));
-    //     // printf("NNet_SendMessage(&ctx->hm_client[0].value, (uint8_t *)buff, strlen(buff))");
-    // }
+    for (i = 0; i < 64 * 100 && a >= 0; i++) {
+        sprintf(buff, "%ld", i++);
+        a = NNet_SendMessage(&ctx->hm_client[0].value, (uint8_t *)buff, strlen(buff));
+        // printf("NNet_SendMessage(&ctx->hm_client[0].value, (uint8_t *)buff, strlen(buff))");
+    }
+
+    // NNet_SendMessage(&ctx->hm_client[0].value, &(uint8_t){50}, 1);
 
     while (1) {
 
@@ -48,8 +50,6 @@ int main(int argc, char **argv) {
         }
 
 
-        NNet_SendMessage(&ctx->hm_client[0].value, &(uint8_t){50}, 1);
-
         struct NNet_message msg = {0};
 
         size_t aze = 0;
@@ -57,13 +57,11 @@ int main(int argc, char **argv) {
 
             printf("-----msg recv----\n");
             printf("msg from %x:%d\n", msg.client->addr.sin_addr.s_addr, ntohs(msg.client->addr.sin_port));
-            for (int i = 0; i < msg.DataLength; i++) {
-                printf("%c", msg.payload[i]);
-            }
+            // for (int i = 0; i < msg.DataLength; i++) {
+            //     printf("%c", msg.payload[i]);
+            // }
             printf("\n-----------------\n");
         }
-
-
 
         NNet_HandleSend(ctx);
     }

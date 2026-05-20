@@ -29,11 +29,14 @@
 // Dump the send buffer and the recv buffer in hexa in the stdin
 // #define HEX_DUMP
 
-// log precision, 0 = none
+// debug log precision, 0 = none
+#ifndef DEBUG_LOG
 #define DEBUG_LOG 1
+#endif
 
 #define TIME_PER_WHEEL_SLOT_MS 16
 #define ACK_TIME_OUT_MS 64
+
 
 typedef struct NNet_context NNet_context;
 typedef struct NNet_client  NNet_client;
@@ -41,10 +44,12 @@ typedef struct NNet_message NNet_message;
 
 
 
-// RETURN FUNCTION ERROR
+// RETURN FUNCTION
 enum FUNCTION_RETURN {
 
     BUDGET_HIT                      = 1,
+
+    OK                              = 0,
 
     ERROR_SOCKET                    = -1,
     ERROR_DATAGRAM_TOO_BIG          = -2,
@@ -52,9 +57,8 @@ enum FUNCTION_RETURN {
     ERROR_FIFO_CAPACITY_EXCEEDED    = -4,
     ERROR_ARRENA_SIZE_EXCEEDED      = -5,
     ERROR_TOO_MUCH_MESSAGE          = -6,
+
 };
-
-
 
 enum NNet_flag {
     PACKET_FLAG_COMPRESSED = (1 << 14), // si commpressé
@@ -226,8 +230,8 @@ struct NNet_context {
 void NNet_Init(NNet_context *ctx);
 
 // @return 0 if all good
-// @return BUDGET_HIT if budget hit (BUDGET macro can be defined)
 // @return negative number if error
+// @return BUDGET_HIT if budget hit (BUDGET macro can be defined)
 // @error ERROR_SOCKET, ERROR_DATAGRAM_TOO_BIG, ERROR_MESSAGE_PARSING
 int NNet_HandleRead(NNet_context *ctx);
 
